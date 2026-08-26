@@ -1,0 +1,21 @@
+{
+  "name": "@cloud-itonami/app-tenkyu",
+  "version": "0.1.0",
+  "private": true,
+  "description": "tenkyu - live public spatial intelligence on a WebGPU globe, read from Cloudflare R2 Data Catalog",
+  "scripts": {
+    "test": "nbb --classpath src:test:../../kotoba-lang/geo/src:../../kotoba-lang/sgp4/src:../../kotoba-lang/jp-go-digital-design-system/src:../../kotoba-lang/html/src:../../kotoba-lang/css/src test/run.cljs",
+    "build:worker": "node ../../../scripts/resource-guard.mjs run build -- npx shadow-cljs release worker",
+    "build:app": "node ../../../scripts/resource-guard.mjs run build -- npx shadow-cljs release app",
+    "build": "npm run build:app && npm run build:worker",
+    "test:browser": "node test/browser/smoke.mjs"
+  },
+  "devDependencies": {
+    "shadow-cljs": "^2.28.20",
+    "wrangler": "^3.90.0"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

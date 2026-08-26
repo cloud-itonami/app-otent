@@ -1,0 +1,54 @@
+;; Two builds from one source tree, and that is the point.
+;;
+;;   :worker  -> dist/worker.js   the Cloudflare Worker (wrangler.jsonc `main`)
+;;   :app     -> public/app.js    the browser bundle the document loads
+;;
+;; They share `route.cljc`, `views.cljc`, `db.cljc` and the whole
+;; `globe/scene.cljc` -- so the page the server renders and the page the
+;; browser mounts are the same function, not two implementations that agree
+;; until someone edits one of them.
+;;
+;; `:warnings-as-errors` goes inside `:compiler-options`. NOT `:build-options`:
+;; shadow silently ignores the key there, which turns the check itself into a
+;; check that cannot fail -- an undeclared var stays a warning, release exits
+;; 0, and the bundle throws on its first request.
+{:source-paths
+ ["src" "test"
+  ;; Sibling checkouts in the west layout, the arrangement net-kotobase/lake
+  ;; and cloud-itonami/air-book both use. Pins are the superproject's
+  ;; manifest/west.yml.
+  "../../kotoba-lang/sgp4/src"
+  "../../kotoba-lang/geo/src"
+  "../../kotoba-lang/jp-go-digital-design-system/src"
+  "../../kotoba-lang/jp-go-digital-design-system/resources"
+  "../../kotoba-lang/html/src"
+  "../../kotoba-lang/css/src"
+  ;; The Iceberg read path: Avro manifests, Parquet data files, and the
+  ;; columnar engine that scans them.
+  "../../kotoba-lang/org-apache-avro/src"
+  "../../kotoba-lang/org-apache-parquet/src"
+  "../../kotoba-lang/columnar/src"
+  "../../kotoba-lang/json/src"
+  "../../kotoba-lang/org-ietf-deflate/src"
+  "../../kotoba-lang/org-ietf-zstd/src"]
+
+ :dependencies
+ [[reagent "1.2.0"]
+  [re-frame "1.4.3"]]
+
+ :builds
+ {:worker {:target :esm
+           :output-dir "dist"
+           :modules {:worker {:exports {default app-tenkyu.worker/handler}}}
+           :compiler-options {:output-feature-set :es2020
+                              :infer-externs :auto
+                              :warnings-as-errors true}}
+
+  :app {:target :esm
+        :output-dir "public"
+        ;; No `:exports` -- an empty map fails shadow's spec, and this
+        ;; module exports nothing: it is loaded for its `:init-fn`.
+        :modules {:app {:init-fn app-tenkyu.core/init}}
+        :compiler-options {:output-feature-set :es2020
+                           :infer-externs :auto
+                           :warnings-as-errors true}}}}

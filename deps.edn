@@ -1,0 +1,8 @@
+{:paths ["src"]
+ :deps {io.github.kotoba-lang/sgp4 {:local/root "../../kotoba-lang/sgp4"}
+        io.github.kotoba-lang/geo {:local/root "../../kotoba-lang/geo"}}
+ :aliases
+ {:cljs {:extra-paths ["test"]
+         :extra-deps {org.clojure/clojurescript {:mvn/version "1.11.132"}
+                      thheller/shadow-cljs {:mvn/version "2.28.20"}}}
+  :test {:extra-paths ["test"]}}}

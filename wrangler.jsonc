@@ -1,0 +1,52 @@
+{
+  "name": "app-tenkyu",
+  "main": "dist/worker.js",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+
+  // tenkyu.itonami.cloud is deliberately NOT claimed here.
+  //
+  // A custom domain belongs to exactly one Worker, the last deploy wins,
+  // and neither side is told. net-kotobase records what that cost once:
+  // git.kotobase.net moved onto an empty store and 28 repositories began
+  // answering `404 repository not found`. So: prove the Worker on
+  // *.workers.dev first, attach the hostname second, as its own change.
+  //
+  // "routes": [{ "pattern": "tenkyu.itonami.cloud", "custom_domain": true }],
+
+  // The browser bundle and nothing else. The Worker renders the document
+  // itself, so there is no index.html here to drift away from it.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "none"
+  },
+
+  "r2_buckets": [
+    // The SAME bucket cloud-itonami/tenkyu writes to. This Worker is a
+    // READER of it: no put, no delete, no catalog write. Every Iceberg
+    // manifest, every Parquet data file and every basemap tile is read
+    // through this binding, which is why the bucket needs no public URL
+    // and the browser never sees a signed link.
+    { "binding": "DATALAKE", "bucket_name": "cloud-itonami-datalake" }
+  ],
+
+  "vars": {
+    "BUCKET_NAME": "cloud-itonami-datalake",
+    "NAMESPACE": "cloud_itonami",
+    "CATALOG_URI": "https://catalog.cloudflarestorage.com/4da88288dc30d9ee257f319d3c33ecf0/cloud-itonami-datalake",
+    "WAREHOUSE": "4da88288dc30d9ee257f319d3c33ecf0_cloud-itonami-datalake"
+  }
+
+  // CF_CATALOG_TOKEN is a SECRET, set with `wrangler secret put`, never in
+  // this file. It reaches only the catalog's metadata face -- the data
+  // itself comes through the R2 binding above, so a leak of this token
+  // does not hand anyone the bucket.
+  //
+  // It needs R2 Data Catalog: Read. Note that reaching the catalog is not
+  // the same as being able to write to it: a token with only the metadata
+  // permission passes GET /v1/config and fails create_table with a
+  // storage-side 401. This Worker only ever reads.
+}

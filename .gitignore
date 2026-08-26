@@ -1,0 +1,8 @@
+.cpcache/
+.shadow-cljs/
+node_modules/
+dist/
+public/app.js
+public/*.map
+.nrepl-port
+.DS_Store
