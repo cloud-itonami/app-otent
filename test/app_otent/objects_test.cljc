@@ -25,7 +25,7 @@
 
 (deftest positions-older-than-the-window-are-dropped
   (let [rows [(ac "fresh" t0)
-              (ac "old" (- t0 1800001))]        ; one ms past 30 minutes
+              (ac "old" (- t0 (inc (o/window-ms "aircraft"))))]  ; one ms past it
         {:keys [objects stats]} (o/fold "aircraft" rows)]
     (is (= ["fresh"] (map :id objects)))
     (is (= 1 (:dropped-stale stats)))
@@ -49,9 +49,14 @@
   (testing "an earthquake is an event that stays happened; an aircraft fix
             decays in minutes. One window for both would either hide quakes
             or show day-old aircraft."
-    (is (= 1800000 (o/window-ms "aircraft")))
-    (is (= 604800000 (o/window-ms "quake")))
-    (is (< (o/window-ms "aircraft") (o/window-ms "quake"))))
+    (is (< (o/window-ms "aircraft") (o/window-ms "quake")))
+    (is (< (o/window-ms "aircraft") 3600000)
+        "an aircraft fix an hour old is not a live position"))
+  (testing "and every window must outlast the poll interval, or the map
+            empties between polls with nothing in the output saying why"
+    (doseq [k ["aircraft" "vessel" "quake" "fire" "satellite"]]
+      (is (> (o/window-ms k) o/ingest-interval-ms)
+          (str k " has a window shorter than the ingest interval"))))
   (testing "an unknown kind gets a window, not nil -- a nil cutoff would
             silently disable the filter for exactly the kinds nobody
             thought about"

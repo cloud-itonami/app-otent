@@ -42,12 +42,35 @@
   event that happened and stays happened -- the dedup there is for USGS
   revising a magnitude, not for the quake moving. A satellite row is a set
   of elements the browser propagates itself, so what matters is that the
-  elements are fresh enough to propagate, not that the row is recent."
-  {"aircraft"  1800000                  ; 30 min
+  elements are fresh enough to propagate, not that the row is recent.
+
+  The aircraft window is also what the scan prunes on, so it decides how
+  many Parquet files the Worker opens. It was 30 minutes until 2026-08-26,
+  when the scheduler went live and the Worker started returning `error
+  code: 1102` -- exceeded CPU -- on the cold path. Twelve minutes covers one
+  ten-minute poll plus margin, which is all the fold needs: each poll
+  carries essentially every visible aircraft, so a second file adds
+  duplicates rather than coverage."
+  {"aircraft"  720000                   ; 12 min -- see below
    "vessel"    3600000                  ; 1 h
    "fire"      259200000                ; 3 days -- FIRMS publishes in batches
    "quake"     604800000                ; 7 days
    "satellite" 604800000})              ; 7 days -- TLE accuracy degrades past that
+
+(def ingest-interval-ms
+  "How often `otent` polls the fastest position feed, restated here.
+
+  A duplicate of `otent.feeds.core`'s `:min-interval-ms` for `:opensky`,
+  and it has to be: the two repositories do not share code, and the
+  relationship between them is load-bearing. **A window shorter than the
+  poll interval empties the map between polls** -- every row would be older
+  than the cutoff for the last stretch of every interval, and the globe
+  would show no aircraft at all, periodically, with nothing in the output
+  saying why.
+
+  Restating it means the constraint can be asserted. Leaving it implicit
+  means it holds until someone changes one number."
+  600000)
 
 (def fallback-window-ms 3600000)
 

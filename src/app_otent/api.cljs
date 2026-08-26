@@ -93,7 +93,7 @@
   eliminate, arriving through the other door. This is the version of the
   renderer; the snapshot is the version of the data; a body is identified
   by both."
-  "v4")
+  "v5")
 
 (defn- cache-key [kind snapshot-id]
   (str "https://app-otent.internal/" body-version "/" kind "/" snapshot-id))
