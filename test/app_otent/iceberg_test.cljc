@@ -34,3 +34,4 @@
   ;; returning a positive substring would not be.
   (let [ml "s3://b/metadata/snap--12345-0-uuid.avro"]
     (is (str/includes? (snapshot-id-from ml -12345) "snap--12345"))))
+

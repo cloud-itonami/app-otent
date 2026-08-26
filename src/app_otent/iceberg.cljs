@@ -29,6 +29,7 @@
   returns HTTP 500 from Cloudflare, and guessing it returns 404. Measured
   both, 2026-08-26."
   (:require [app-otent.iceberg-id :as ice-id]
+            [app-otent.prune :as prune]
             [avro.binary :as abin]
             [avro.file :as avro]
             [parquet.source :as pq]
@@ -99,7 +100,13 @@
                                  :manifest-list ml
                                  :summary (get snap "summary")
                                  :schema (mapv #(get % "name")
-                                               (get (last (get m "schemas")) "fields"))}))))))))
+                                               (get (last (get m "schemas")) "fields"))
+                                 ;; name -> field id. The manifest states
+                                 ;; per-file bounds keyed by ID, not by name,
+                                 ;; so pruning needs this map and cannot
+                                 ;; guess it.
+                                 :field-ids (into {} (map (juxt #(get % "name") #(get % "id")))
+                                                  (get (last (get m "schemas")) "fields"))}))))))))
       (.catch (fn [e] {:ok? false :error :iceberg/unreachable
                        :detail (str (.-message e))}))))
 
@@ -178,7 +185,9 @@
                                                {:path (get d "file_path")
                                                 :records (js/Number (get d "record_count"))
                                                 :bytes (js/Number (get d "file_size_in_bytes"))
-                                                :format (get d "file_format")})})))))))))
+                                                :format (get d "file_format")
+                                                :lower (prune/bounds-map (get d "lower_bounds"))
+                                                :upper (prune/bounds-map (get d "upper_bounds"))})})))))))))
                      (.then (fn [rs]
                               (let [rs (js->clj rs)
                                     bad (remove :ok? rs)]
@@ -217,15 +226,23 @@
   here by an entirely different route. If they disagree, something between
   the manifest and the Parquet decoder is wrong, and rows that look
   perfectly good are missing."
-  [{:keys [r2 bucket] :as cfg} prefix namespace* table columns]
+  ([cfg prefix namespace* table columns]
+   (scan-table cfg prefix namespace* table columns nil))
+  ([{:keys [r2 bucket] :as cfg} prefix namespace* table columns prune]
   (-> (load-table cfg prefix namespace* table)
       (.then (fn [t]
                (if-not (:ok? t)
                  t
                  (-> (data-files r2 bucket (:manifest-list t))
-                     (.then (fn [df]
-                              (if-not (:ok? df)
-                                df
+                     (.then (fn [df0]
+                              (if-not (:ok? df0)
+                                df0
+                                (let [p (if prune
+                                          (prune/prune-files (:files df0)
+                                                       (get (:field-ids t) (:field prune))
+                                                       (:window-ms prune))
+                                          {:files (:files df0) :pruned 0 :reason :not-requested})
+                                      df (assoc df0 :files (:files p))]
                                 (-> (js/Promise.all
                                      (clj->js (map #(read-rows r2 bucket % columns) (:files df))))
                                     (.then (fn [rs]
@@ -234,16 +251,38 @@
                                                (if (seq bad)
                                                  (first bad)
                                                  (let [rows (vec (mapcat :rows rs))
+                                                       ;; The files actually READ state their own row
+                                                       ;; counts. Checking against those localises a
+                                                       ;; mismatch to the decoder; checking against
+                                                       ;; the snapshot total only works when nothing
+                                                       ;; was pruned, so both are checked and neither
+                                                       ;; is dropped when pruning is on.
+                                                       expected (reduce + 0 (map :records (:files df)))
                                                        claimed (some-> (get (:summary t) "total-records")
                                                                        js/Number)]
-                                                   (if (and claimed (not= claimed (count rows)))
+                                                   (cond
+                                                     (not= expected (count rows))
+                                                     {:ok? false :error :iceberg/record-count-mismatch
+                                                      :detail (str "the " (count (:files df))
+                                                                   " file(s) read declare " expected
+                                                                   " records; the scan produced "
+                                                                   (count rows))}
+
+                                                     (and claimed (zero? (:pruned p))
+                                                          (not= claimed (count rows)))
                                                      {:ok? false :error :iceberg/total-records-mismatch
                                                       :detail (str "snapshot " (:snapshot-id t)
                                                                    " claims " claimed
-                                                                   " records; the scan produced "
+                                                                   " records; the unpruned scan produced "
                                                                    (count rows))}
+
+                                                     :else
                                                      {:ok? true
                                                       :rows rows
                                                       :snapshot-id (:snapshot-id t)
                                                       :files (count (:files df))
-                                                      :schema (:schema t)}))))))))))))))))
+                                                      :files-total (count (:files df0))
+                                                      :files-pruned (:pruned p)
+                                                      :prune (dissoc p :files)
+                                                      :table-records claimed
+                                                      :schema (:schema t)}))))))))))))))))))

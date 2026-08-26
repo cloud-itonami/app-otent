@@ -93,7 +93,7 @@
   eliminate, arriving through the other door. This is the version of the
   renderer; the snapshot is the version of the data; a body is identified
   by both."
-  "v2")
+  "v4")
 
 (defn- cache-key [kind snapshot-id]
   (str "https://app-otent.internal/" body-version "/" kind "/" snapshot-id))
@@ -148,7 +148,15 @@
                                        (.set (.-headers r) "x-otent-cache" "hit")
                                        r)
                                      (-> (ice/scan-table cfg (:prefix p) (aget env "NAMESPACE")
-                                                         (:table spec) (:columns spec))
+                                                         (:table spec) (:columns spec)
+                                                         ;; Skip the data files that cannot hold a row
+                                                         ;; the fold would keep. Same window as the
+                                                         ;; fold, and the cutoff is derived from the
+                                                         ;; manifests' own upper bounds, so the two
+                                                         ;; cannot drift into a scan that reads a
+                                                         ;; window the fold then discards.
+                                                         {:field "observed_at"
+                                                          :window-ms (obj/window-ms kind)})
                                          (.then
                                           (fn [s]
                                             (if-not (:ok? s)
@@ -173,6 +181,10 @@
                                                            {:kind kind
                                                             :snapshot-id (:snapshot-id s)
                                                             :files (:files s)
+                                                            :files-total (:files-total s)
+                                                            :files-pruned (:files-pruned s)
+                                                            :prune (:prune s)
+                                                            :table-records (:table-records s)
                                                             :count (count (:objects folded))
                                                             ;; What was read, and what was
                                                             ;; dropped for which of the two
