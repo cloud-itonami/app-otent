@@ -76,8 +76,27 @@
       (get a "line1") (assoc :line1 (get a "line1") :line2 (get a "line2")
                              :name (get a "name")))))
 
+(def body-version
+  "Bumped whenever the SHAPE of a response body changes.
+
+  The cache key is the snapshot id, and the reasoning for that is sound as
+  far as it goes: a snapshot id is a content address for the table's state,
+  so a hit is provably the current data. What it misses is that the body is
+  a function of the snapshot AND of the code that renders it. On 2026-08-26
+  the fold that collapses an append-only table to one row per object landed,
+  was deployed, and changed nothing a reader could see -- the table had not
+  committed since, so every request was served the pre-fold body out of
+  cache, 25,219 rows of it, from a Worker whose code no longer produced
+  that.
+
+  A stale deploy is the failure mode the snapshot key was chosen to
+  eliminate, arriving through the other door. This is the version of the
+  renderer; the snapshot is the version of the data; a body is identified
+  by both."
+  "v2")
+
 (defn- cache-key [kind snapshot-id]
-  (str "https://app-otent.internal/v1/" kind "/" snapshot-id))
+  (str "https://app-otent.internal/" body-version "/" kind "/" snapshot-id))
 
 (defn objects
   "`GET /api/objects/:kind`.
