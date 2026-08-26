@@ -5,7 +5,8 @@
             [app-otent.propagate-test]
             [app-otent.db-test]
             [app-otent.views-test]
-            [app-otent.iceberg-test]))
+            [app-otent.iceberg-test]
+            [app-otent.objects-test]))
 
 (defmethod t/report [:cljs.test/default :end-run-tests] [m]
   (println)
@@ -18,4 +19,4 @@
     (t/successful? m) (println "OK")
     :else (set! (.-exitCode js/process) 1)))
 
-(t/run-tests 'app-otent.scene-test 'app-otent.route-test 'app-otent.propagate-test 'app-otent.db-test 'app-otent.views-test 'app-otent.iceberg-test)
+(t/run-tests 'app-otent.scene-test 'app-otent.route-test 'app-otent.propagate-test 'app-otent.db-test 'app-otent.views-test 'app-otent.iceberg-test 'app-otent.objects-test)

@@ -23,6 +23,7 @@
   A globe drawing month-old aircraft looks exactly like a globe drawing
   live ones, so the age has to be in the data, not in the operator's head."
   (:require [app-otent.iceberg :as ice]
+            [app-otent.objects :as obj]
             [clojure.string :as str]))
 
 (def kinds
@@ -136,14 +137,32 @@
                                                (js/JSON.stringify (clj->js (dissoc s :ok?)))
                                                #js {:status 502
                                                     :headers #js {"content-type" "application/json"}})
-                                              (let [body (js/JSON.stringify
+                                              ;; The table is append-only, so a
+                                              ;; scan holds every past position of
+                                              ;; every object. Returning them all
+                                              ;; drew the same aircraft several
+                                              ;; times, at fixes up to a day and a
+                                              ;; half old, indistinguishable from
+                                              ;; live ones. The fold is pure and
+                                              ;; measured from the data, not the
+                                              ;; clock, so this body stays a
+                                              ;; function of the snapshot id the
+                                              ;; cache key promises.
+                                              (let [folded (obj/fold kind (mapv row->object (:rows s)))
+                                                    body (js/JSON.stringify
                                                           (clj->js
                                                            {:kind kind
                                                             :snapshot-id (:snapshot-id s)
                                                             :files (:files s)
-                                                            :count (count (:rows s))
+                                                            :count (count (:objects folded))
+                                                            ;; What was read, and what was
+                                                            ;; dropped for which of the two
+                                                            ;; reasons. Without this a reader
+                                                            ;; cannot tell `no aircraft` from
+                                                            ;; `no aircraft recently`.
+                                                            :scan (:stats folded)
                                                             :as-of (js/Date.now)
-                                                            :objects (mapv row->object (:rows s))}))
+                                                            :objects (:objects folded)}))
                                                     resp (js/Response.
                                                           body
                                                           #js {:headers
