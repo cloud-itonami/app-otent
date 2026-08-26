@@ -1,7 +1,10 @@
-# app-tenkyu
+# app-otent
 
-**A spy-satellite view of the planet, drawn from a data lake instead of a
-vendor's API.**
+**お天道様 — the sun that sees everything, drawn from a data lake instead
+of a vendor's API.**
+
+Japanese keeps the sun as a witness: お天道様は見ている, *the sun is
+watching*. That is what this page is.
 
 Live at **https://app-otent.04-feasts-minded.workers.dev**
 
@@ -238,10 +241,16 @@ answering `404 repository not found`.
 
 ## Naming
 
-`app-tenkyu` is a **role**-plane name (`app-` + subject), the established
-form in this org. 天球 (tenkyu) is the celestial sphere; the name does not
-describe the function, so it is said here and registered in
+`app-otent` is a **role**-plane name (`app-` + subject), the established
+form in this org. お天道様 (otentosama) is the sun as a witness; the name
+does not describe the function, so it is said here and registered in
 `manifest/concept-vocabulary.edn`.
+
+> Renamed from `app-tenkyu` on 2026-08-26, owner's call. 天球 (the
+> celestial sphere) named the *surface things are drawn on*; お天道様 names
+> the *watching*, which is the subject. GitHub redirects the old name; west
+> carries only the new one, and the old Worker was deleted rather than left
+> answering on a stale URL.
 
 ## What it does not do
 
