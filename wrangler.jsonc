@@ -1,12 +1,12 @@
 {
-  "name": "app-tenkyu",
+  "name": "app-otent",
   "main": "dist/worker.js",
   "compatibility_date": "2026-06-01",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "observability": { "enabled": true },
 
-  // tenkyu.itonami.cloud is deliberately NOT claimed here.
+  // otent.itonami.cloud is deliberately NOT claimed here.
   //
   // A custom domain belongs to exactly one Worker, the last deploy wins,
   // and neither side is told. net-kotobase records what that cost once:
@@ -14,7 +14,7 @@
   // answering `404 repository not found`. So: prove the Worker on
   // *.workers.dev first, attach the hostname second, as its own change.
   //
-  // "routes": [{ "pattern": "tenkyu.itonami.cloud", "custom_domain": true }],
+  // "routes": [{ "pattern": "otent.itonami.cloud", "custom_domain": true }],
 
   // The browser bundle and nothing else. The Worker renders the document
   // itself, so there is no index.html here to drift away from it.
@@ -25,7 +25,7 @@
   },
 
   "r2_buckets": [
-    // The SAME bucket cloud-itonami/tenkyu writes to. This Worker is a
+    // The SAME bucket cloud-itonami/otent writes to. This Worker is a
     // READER of it: no put, no delete, no catalog write. Every Iceberg
     // manifest, every Parquet data file and every basemap tile is read
     // through this binding, which is why the bucket needs no public URL

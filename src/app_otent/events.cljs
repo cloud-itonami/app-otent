@@ -1,14 +1,14 @@
-(ns app-tenkyu.events
+(ns app-otent.events
   "re-frame events: the only place a request is made or a clock is read.
 
   Everything these events compute is computed by a pure function in
-  `app-tenkyu.db`, `.scene` or `.propagate`. What lives here is the effect
+  `app-otent.db`, `.scene` or `.propagate`. What lives here is the effect
   -- the fetch, the timer, the GPU upload -- because that is what re-frame
   is for and what a test cannot hold."
   (:require [re-frame.core :as rf]
-            [app-tenkyu.db :as db]
-            [app-tenkyu.propagate :as prop]
-            [app-tenkyu.route :as route]))
+            [app-otent.db :as db]
+            [app-otent.propagate :as prop]
+            [app-otent.route :as route]))
 
 (rf/reg-event-db ::init (fn [_ _] db/default-db))
 

@@ -1,4 +1,4 @@
-(ns app-tenkyu.globe.renderer
+(ns app-otent.globe.renderer
   "Pick a backend, then speak to it through one vocabulary.
 
   WebGPU first, WebGL 2 second. That order is the workspace rule, and the
@@ -11,8 +11,8 @@
   **Which backend ran is reported, never assumed.** `:backend` is in the
   state and the UI shows it, because a WebGPU build silently falling back
   to WebGL for a month is exactly the kind of thing nobody notices."
-  (:require [app-tenkyu.globe.webgpu :as gpu]
-            [app-tenkyu.globe.webgl :as gl]))
+  (:require [app-otent.globe.webgpu :as gpu]
+            [app-otent.globe.webgl :as gl]))
 
 (defn create
   "Resolve to `{:backend :webgpu|:webgl2 ...}`, or to

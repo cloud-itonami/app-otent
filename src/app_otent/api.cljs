@@ -1,4 +1,4 @@
-(ns app-tenkyu.api
+(ns app-otent.api
   "The read API the globe talks to, and the cache that makes it affordable.
 
   ## Cached on the snapshot id, which makes staleness impossible
@@ -22,19 +22,19 @@
   `:snapshot-id`, `:rows`, `:files` and `:as-of` travel with the payload.
   A globe drawing month-old aircraft looks exactly like a globe drawing
   live ones, so the age has to be in the data, not in the operator's head."
-  (:require [app-tenkyu.iceberg :as ice]
+  (:require [app-otent.iceberg :as ice]
             [clojure.string :as str]))
 
 (def kinds
-  {"satellite" {:table "tenkyu_satellite"
+  {"satellite" {:table "otent_satellite"
                 :columns ["object_id" "observed_at" "attrs_json"]}
-   "quake"     {:table "tenkyu_quake"
+   "quake"     {:table "otent_quake"
                 :columns ["object_id" "observed_at" "lat" "lon" "alt_km" "attrs_json"]}
-   "aircraft"  {:table "tenkyu_aircraft"
+   "aircraft"  {:table "otent_aircraft"
                 :columns ["object_id" "observed_at" "lat" "lon" "alt_km" "attrs_json"]}
-   "fire"      {:table "tenkyu_fire"
+   "fire"      {:table "otent_fire"
                 :columns ["object_id" "observed_at" "lat" "lon" "attrs_json"]}
-   "vessel"    {:table "tenkyu_vessel"
+   "vessel"    {:table "otent_vessel"
                 :columns ["object_id" "observed_at" "lat" "lon" "attrs_json"]}})
 
 ;; `env` is read with `aget`, never `(.-FOO env)`.
@@ -57,7 +57,7 @@
 (defn row->object
   "One Parquet row -> the shape the globe consumes.
 
-  Everything in the table is stored as text (see `tenkyu.observation` on
+  Everything in the table is stored as text (see `otent.observation` on
   why); the cast happens here, once, at the surface that decided what the
   numbers are for."
   [r]
@@ -76,7 +76,7 @@
                              :name (get a "name")))))
 
 (defn- cache-key [kind snapshot-id]
-  (str "https://app-tenkyu.internal/v1/" kind "/" snapshot-id))
+  (str "https://app-otent.internal/v1/" kind "/" snapshot-id))
 
 (defn objects
   "`GET /api/objects/:kind`.
@@ -111,7 +111,7 @@
                           (js/Response.
                            (js/JSON.stringify (clj->js (assoc (dissoc t :ok?) :kind kind)))
                            ;; A table that does not exist is a 404 about THAT
-                           ;; kind, not a server error: `tenkyu` reports fires
+                           ;; kind, not a server error: `otent` reports fires
                            ;; and vessels as unmeasured, and this is the same
                            ;; fact arriving at the browser.
                            #js {:status (if (= :iceberg/catalog-error (:error t)) 404 502)
@@ -125,7 +125,7 @@
                                      ;; The snapshot has not moved: this IS
                                      ;; the current data, not a stale copy.
                                      (let [r (js/Response. (.-body hit) hit)]
-                                       (.set (.-headers r) "x-tenkyu-cache" "hit")
+                                       (.set (.-headers r) "x-otent-cache" "hit")
                                        r)
                                      (-> (ice/scan-table cfg (:prefix p) (aget env "NAMESPACE")
                                                          (:table spec) (:columns spec))
@@ -152,8 +152,8 @@
                                                                     ;; the snapshot id, so this body
                                                                     ;; can never change.
                                                                     "cache-control" "public, max-age=31536000, immutable"
-                                                                    "x-tenkyu-cache" "miss"
-                                                                    "x-tenkyu-snapshot" (:snapshot-id s)}})]
+                                                                    "x-otent-cache" "miss"
+                                                                    "x-otent-snapshot" (:snapshot-id s)}})]
                                                 (.waitUntil ctx (.put cache ck (.clone resp)))
                                                 resp))))))))))))))))))))))
 
@@ -164,12 +164,12 @@
   zoom to `max-zoom`, and a constant in the app that disagreed with the
   bucket would produce a globe full of holes at exactly one zoom level."
   [env]
-  (-> (.get (aget env "DATALAKE") "tenkyu/basemap/manifest.json")
+  (-> (.get (aget env "DATALAKE") "otent/basemap/manifest.json")
       (.then (fn [o]
                (if (nil? o)
                  (js/Response. (js/JSON.stringify
                                 #js {:error "no-basemap-manifest"
-                                     :detail (str "tenkyu/basemap/manifest.json is not in the "
+                                     :detail (str "otent/basemap/manifest.json is not in the "
                                                   "bucket -- run `basemap.cljs vector` to write it")})
                                #js {:status 503
                                     :headers #js {"content-type" "application/json"}})
@@ -185,7 +185,7 @@
   so a constant here that disagreed with the bucket would either hide a
   city or 404 over the rest of the planet."
   [env]
-  (-> (.get (aget env "DATALAKE") "tenkyu/basemap/buildings/manifest.json")
+  (-> (.get (aget env "DATALAKE") "otent/basemap/buildings/manifest.json")
       (.then (fn [o]
                (if (nil? o)
                  ;; 200 with an empty area list, NOT a 503: no buildings
@@ -206,7 +206,7 @@
   only way the browser can see it: there is no public bucket URL and no
   signed link handed out."
   [env rest-path]
-  (let [key (str "tenkyu/basemap/" rest-path)]
+  (let [key (str "otent/basemap/" rest-path)]
     (-> (.get (aget env "DATALAKE") key)
         (.then (fn [o]
                  (if (nil? o)

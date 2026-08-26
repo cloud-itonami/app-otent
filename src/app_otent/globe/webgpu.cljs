@@ -1,9 +1,9 @@
-(ns app-tenkyu.globe.webgpu
+(ns app-otent.globe.webgpu
   "The WebGPU backend: preferred where the browser has it.
 
   Same scene, same vertex data, same three passes as
-  `app-tenkyu.globe.webgl` -- the geometry all comes from
-  `app-tenkyu.globe.scene`, which is why the two can be compared at all.
+  `app-otent.globe.webgl` -- the geometry all comes from
+  `app-otent.globe.scene`, which is why the two can be compared at all.
 
   ## What WebGPU actually buys here
 
@@ -22,7 +22,7 @@
   is a real difference between the backends and it is confined to this
   one shader -- the vertex DATA is byte-identical, which is what the
   parity test asserts."
-  (:require [app-tenkyu.globe.scene :as scene]
+  (:require [app-otent.globe.scene :as scene]
             [kotoba.geo.mesh :as mesh]))
 
 (def ^:private tile-wgsl "
@@ -492,8 +492,8 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
     ;; backend too. It was WebGL-only, so the check passed vacuously on
     ;; the preferred renderer -- "n/a (webgpu)" is what a check that
     ;; cannot fail looks like.
-    (let [d (or (aget js/window "__tenkyu") #js {})]
+    (let [d (or (aget js/window "__otent") #js {})]
       (aset d "gpuTiles" (count @tiles))
       (aset d "gpuBuildings" (:count @buildings 0))
       (aset d "gpuSurface" (:count @surface 0))
-      (aset js/window "__tenkyu" d))))
+      (aset js/window "__otent" d))))

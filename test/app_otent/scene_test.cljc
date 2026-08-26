@@ -1,4 +1,4 @@
-(ns app-tenkyu.scene-test
+(ns app-otent.scene-test
   "The scene frame, checked against the library that owns it.
 
   The point of this file: `lat-lon->globe` must agree with
@@ -7,10 +7,10 @@
   drift, every marker sits a few degrees off the coastline under it and
   nothing errors."
   (:require [clojure.test :refer [deftest is testing]]
-            [app-tenkyu.globe.scene :as s]
+            [app-otent.globe.scene :as s]
             [kotoba.geo.mesh :as mesh]
             [kotoba.geo.projection :as proj]
-            [app-tenkyu.db :as db]))
+            [app-otent.db :as db]))
 
 (defn- v3-dist [a b]
   (Math/sqrt (reduce + (map (fn [x y] (let [d (- x y)] (* d d))) a b))))
@@ -200,7 +200,7 @@
 ;; Buildings
 
 (def ^:private tokyo-block
-  ;; A square footprint near Tokyo station, in the shape tenkyu writes.
+  ;; A square footprint near Tokyo station, in the shape otent writes.
   [{:h 40.0 :b 0.0 :r [139.767 35.681 139.768 35.681 139.768 35.682 139.767 35.682]}
    {:h 12.0 :b 0.0 :r [139.769 35.683 139.770 35.683 139.770 35.684 139.769 35.684]}])
 

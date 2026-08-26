@@ -1,6 +1,6 @@
-(ns app-tenkyu.route-test
+(ns app-otent.route-test
   (:require [clojure.test :refer [deftest is testing]]
-            [app-tenkyu.route :as route]))
+            [app-otent.route :as route]))
 
 (deftest every-view-is-reachable-from-its-own-fragment
   ;; The property that makes "views are data" worth anything.

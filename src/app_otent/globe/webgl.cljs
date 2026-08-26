@@ -1,8 +1,8 @@
-(ns app-tenkyu.globe.webgl
+(ns app-otent.globe.webgl
   "The WebGL 2 backend: the fallback, and the one most machines will use.
 
-  It draws exactly what `app-tenkyu.globe.webgpu` draws, from exactly the
-  same vertex data out of `app-tenkyu.globe.scene`. Nothing about where
+  It draws exactly what `app-otent.globe.webgpu` draws, from exactly the
+  same vertex data out of `app-otent.globe.scene`. Nothing about where
   anything *is* lives here -- this file is buffers, shaders and draw
   calls, and that boundary is what makes 'the fallback shows the same
   scene' checkable rather than hopeful.
@@ -25,7 +25,7 @@
   difference is corrected once, in the vertex shader
   (`gl_Position.z = 2z - w`), rather than by keeping two matrices. One
   matrix means one thing to get wrong."
-  (:require [app-tenkyu.globe.scene :as scene]
+  (:require [app-otent.globe.scene :as scene]
             [kotoba.geo.mesh :as mesh]))
 
 (def ^:private tile-vs "#version 300 es
@@ -381,11 +381,11 @@ void main() {
     ;; Report the GL error code and what was actually submitted. A WebGL
     ;; context does not throw: it records an error and keeps going, so a
     ;; misconfigured draw is a blank canvas and a silent number.
-    (let [d (or (aget js/window "__tenkyu") #js {})]
+    (let [d (or (aget js/window "__otent") #js {})]
       (aset d "glError" (.getError gl))
       (aset d "glTiles" (count @tiles))
       (aset d "glLines" (:count @lines 0))
       (aset d "glMarkers" (:count @markers 0))
       (aset d "glBuildings" (:count @buildings 0))
       (aset d "glSurface" (:count @surface 0))
-      (aset js/window "__tenkyu" d))))
+      (aset js/window "__otent" d))))

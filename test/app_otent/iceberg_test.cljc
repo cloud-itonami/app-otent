@@ -1,8 +1,8 @@
-(ns app-tenkyu.iceberg-test
+(ns app-otent.iceberg-test
   "The pure parts of the Iceberg reader."
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
-            [app-tenkyu.iceberg-id :as ice-id]))
+            [app-otent.iceberg-id :as ice-id]))
 
 ;; REQUIRED, not transcribed. The first version of this file copied the
 ;; regex out of `iceberg.cljs` and got the fallback branch wrong, so two

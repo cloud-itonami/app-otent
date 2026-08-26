@@ -1,6 +1,6 @@
-(ns app-tenkyu.iceberg-id
+(ns app-otent.iceberg-id
   "How a snapshot is identified. Pure `.cljc`, and separate from
-  `app-tenkyu.iceberg` on purpose.
+  `app-otent.iceberg` on purpose.
 
   `iceberg.cljs` needs an R2 binding to load, so it cannot be required from
   a test. The first version of this rule was therefore *transcribed* into

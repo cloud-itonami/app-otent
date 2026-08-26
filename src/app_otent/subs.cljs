@@ -1,8 +1,8 @@
-(ns app-tenkyu.subs
+(ns app-otent.subs
   "Subscriptions. Thin on purpose: each one delegates to a pure function in
-  `app-tenkyu.db`, so what the UI sees is testable without re-frame."
+  `app-otent.db`, so what the UI sees is testable without re-frame."
   (:require [re-frame.core :as rf]
-            [app-tenkyu.db :as db]))
+            [app-otent.db :as db]))
 
 (rf/reg-sub ::view :-> :view)
 (rf/reg-sub ::camera :-> :camera)

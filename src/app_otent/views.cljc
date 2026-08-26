@@ -1,4 +1,4 @@
-(ns app-tenkyu.views
+(ns app-otent.views
   "The page, in `jp-go-dds` hiccup.
 
   Pure `.cljc`: every view is a function of a plain map, so the whole UI
@@ -9,7 +9,7 @@
   - Only `jp-go-dds` components. No hand-rolled buttons, no raw hex, no
     px font sizes -- every value is a `--hig-*` token that `tokens/bridge-css`
     resolves onto DADS primitives.
-  - The nav is **generated** from `app-tenkyu.route/views`, so a view
+  - The nav is **generated** from `app-otent.route/views`, so a view
     cannot exist in the dispatch and be missing from the nav.
   - One document. Crossing a view changes state, never location.
 
@@ -17,8 +17,8 @@
   component for -- a full-bleed GPU surface is not markup."
   (:require [clojure.string :as str]
             [jp-go-dds.core :as dds]
-            [app-tenkyu.route :as route]
-            [app-tenkyu.db :as db]))
+            [app-otent.route :as route]
+            [app-otent.db :as db]))
 
 (def app-css
   "Layout for the one thing DADS does not have: a full-bleed GPU surface.
@@ -34,38 +34,38 @@
   which exist; the overlay plaque had no background at all and its text sat
   directly on the imagery, unreadable, while every other rule worked."
   "
-.tenkyu-shell { display:flex; flex-direction:column; min-height:100dvh; }
-.tenkyu-main { flex:1; display:flex; flex-direction:column; }
-.tenkyu-stage--hidden { display:none; }
+.otent-shell { display:flex; flex-direction:column; min-height:100dvh; }
+.otent-main { flex:1; display:flex; flex-direction:column; }
+.otent-stage--hidden { display:none; }
 /* The DADS container is sized for prose (about 40rem). A globe is not
    prose, so the stage breaks out of it -- without this the canvas is 402 px
    wide on a 1400 px screen and the overlay covers most of it. */
-.tenkyu-stage { position:relative; flex:1; min-height:70dvh;
+.otent-stage { position:relative; flex:1; min-height:70dvh;
                 width:min(96vw, 1600px);
                 margin-inline-start:calc(50% - min(48vw, 800px));
                 border-radius: var(--hig-radius-md);
                 overflow:hidden; background: var(--hig-color-tertiary-system-fill); }
-.tenkyu-canvas { position:absolute; inset:0; width:100%; height:100%; display:block;
+.otent-canvas { position:absolute; inset:0; width:100%; height:100%; display:block;
                  touch-action:none; cursor:grab; }
-.tenkyu-canvas:active { cursor:grabbing; }
-.tenkyu-overlay { position:absolute; inset-block-start: var(--hig-spacing-3);
+.otent-canvas:active { cursor:grabbing; }
+.otent-overlay { position:absolute; inset-block-start: var(--hig-spacing-3);
                   inset-inline-start: var(--hig-spacing-3);
                   display:flex; flex-direction:column; gap: var(--hig-spacing-2);
                   pointer-events:none; max-inline-size: 22rem; }
-.tenkyu-overlay > * { pointer-events:auto; }
-.tenkyu-overlay { max-inline-size: min(26rem, 42vw); }
-.tenkyu-plaque { background: var(--hig-color-secondary-system-background);
+.otent-overlay > * { pointer-events:auto; }
+.otent-overlay { max-inline-size: min(26rem, 42vw); }
+.otent-plaque { background: var(--hig-color-secondary-system-background);
                  border: var(--hig-hairline) solid var(--hig-color-separator);
                  border-radius: var(--hig-radius-sm);
                  padding: var(--hig-spacing-2) var(--hig-spacing-3);
                  font-size: var(--hig-text-footnote-font-size); }
-.tenkyu-legend { display:flex; flex-wrap:wrap; gap: var(--hig-spacing-2); }
-.tenkyu-swatch { display:inline-flex; align-items:center; gap: var(--hig-spacing-1); }
-.tenkyu-dot { inline-size:.65rem; block-size:.65rem; border-radius:50%; }
-.tenkyu-nav { display:flex; gap: var(--hig-spacing-2); flex-wrap:wrap; }
-.tenkyu-cities { display:flex; flex-wrap:wrap; align-items:center;
+.otent-legend { display:flex; flex-wrap:wrap; gap: var(--hig-spacing-2); }
+.otent-swatch { display:inline-flex; align-items:center; gap: var(--hig-spacing-1); }
+.otent-dot { inline-size:.65rem; block-size:.65rem; border-radius:50%; }
+.otent-nav { display:flex; gap: var(--hig-spacing-2); flex-wrap:wrap; }
+.otent-cities { display:flex; flex-wrap:wrap; align-items:center;
                  gap: var(--hig-spacing-1); }
-.tenkyu-foot { font-size: var(--hig-text-caption1-font-size);
+.otent-foot { font-size: var(--hig-text-caption1-font-size);
                color: var(--hig-color-secondary-label); }
 ")
 
@@ -92,8 +92,8 @@
     :else x))
 
 (defn- swatch [kind rgb]
-  [:span {:class "tenkyu-swatch"}
-   [:span {:class "tenkyu-dot"
+  [:span {:class "otent-swatch"}
+   [:span {:class "otent-dot"
            :style {:background (str "rgb(" (str/join "," (map #(Math/round (* 255 %)) rgb)) ")")}}]
    (name kind)])
 
@@ -101,7 +101,7 @@
   "Generated from the view table. `dds/button` with an `:href` -- a real
   link that is still a design-system control."
   [current]
-  [:nav {:class "tenkyu-nav" :aria-label "views"}
+  [:nav {:class "otent-nav" :aria-label "views"}
    (for [{:keys [id label current?]} (route/nav-items current)]
      ^{:key id}
      ;; (button LABEL opts) -- label first. Passing an opts map as the first
@@ -115,7 +115,7 @@
 (defn status-plaque
   "What is on the globe, how old it is, and what is not on it."
   [{:keys [backend layers unavailable now]}]
-  [:div {:class "tenkyu-plaque"}
+  [:div {:class "otent-plaque"}
    [:div (if backend
            (str "renderer: " (name backend))
            "renderer: starting")]
@@ -145,8 +145,8 @@
   can be rendered in a test."
   [areas on-fly]
   (when (seq areas)
-    [:div {:class "tenkyu-plaque tenkyu-cities"}
-     [:span {:class "tenkyu-foot"} "buildings: "]
+    [:div {:class "otent-plaque otent-cities"}
+     [:span {:class "otent-foot"} "buildings: "]
      (for [{:keys [id label lat lon buildings]} areas]
        ^{:key id}
        [dds/button (str label " (" (or buildings 0) ")")
@@ -160,18 +160,18 @@
   The canvas itself is NOT here -- see `app`. This is only what is drawn
   over it, and it is mounted only on the globe view."
   [{:keys [backend building-areas on-fly camera] :as m}]
-  [:div {:class "tenkyu-overlay"}
+  [:div {:class "otent-overlay"}
    [status-plaque m]
    (when on-fly [city-shortcuts building-areas on-fly])
    (when camera
-     [:div {:class "tenkyu-plaque tenkyu-foot"}
+     [:div {:class "otent-plaque otent-foot"}
       ;; Rounded with arithmetic rather than `.toFixed`: this namespace is
       ;; `.cljc` and renders on the Worker too, where a JS method on a
       ;; number is a runtime error rather than a compile one.
       (let [r3 (fn [x] (/ (Math/round (* 1000.0 x)) 1000.0))]
         (str (r3 (:lat-deg camera)) ", " (r3 (:lon-deg camera))
              " · " (Math/round (* 6371.0 (- (:distance camera) 1.0))) " km up"))])
-   [:div {:class "tenkyu-plaque tenkyu-legend"}
+   [:div {:class "otent-plaque otent-legend"}
     (for [[k rgb] [[:satellite [1.0 0.85 0.25]] [:quake [1.0 0.35 0.30]]
                    [:aircraft [0.40 0.85 1.0]] [:fire [1.0 0.55 0.15]]
                    [:vessel [0.55 1.0 0.65]]]]
@@ -206,7 +206,7 @@
   [dds/stack
    [dds/heading 2 "Where every mark comes from"]
    [:p "Every layer is a public feed, ingested by "
-    [:code "cloud-itonami/tenkyu"] ", governed, and stored in Cloudflare R2 "
+    [:code "cloud-itonami/otent"] ", governed, and stored in Cloudflare R2 "
     "Data Catalog. The browser reads the lake, never the upstream service."]
    [dds/table
     {:caption "Feeds"
@@ -233,10 +233,10 @@
              "ODbL 1.0 — © OpenStreetMap contributors"]
             ["ground" "OpenStreetMap water / landcover / park, from the same tiles"
              "ODbL 1.0 — © OpenStreetMap contributors"]]}]
-   [:p {:class "tenkyu-foot"}
+   [:p {:class "otent-foot"}
     "Every basemap layer is ingested once into our own bucket and served from it. "
     "Nothing on this page is fetched from a third party at render time."]
-   [:p {:class "tenkyu-foot"}
+   [:p {:class "otent-foot"}
     "Building footprints exist for Tokyo, New York (Manhattan), London and "
     "Singapore only — about 12 km across each, at zoom 14. Everywhere else the "
     "globe has imagery and coastlines but no buildings, because nothing was "
@@ -292,16 +292,16 @@
   reader was on two seconds ago. Hidden with `display:none`, the element
   stays, the context stays, and the tiles stay resident."
   [{:keys [view] :as m}]
-  [:div {:class "tenkyu-shell"}
+  [:div {:class "otent-shell"}
    [dds/container
     [dds/stack
-     [dds/heading 1 "天球 tenkyu"]
-     [:p {:class "tenkyu-foot"}
-      "Live public spatial intelligence, read from Cloudflare R2 Data Catalog."]
+     [dds/heading 1 "お天道様 otent"]
+     [:p {:class "otent-foot"}
+      "お天道様は見ている — live public spatial intelligence, read from Cloudflare R2 Data Catalog."]
      [nav view]
-     [:div {:class (str "tenkyu-stage"
-                        (when-not (= :globe view) " tenkyu-stage--hidden"))}
-      [:canvas {:class "tenkyu-canvas" :id "tenkyu-globe"
+     [:div {:class (str "otent-stage"
+                        (when-not (= :globe view) " otent-stage--hidden"))}
+      [:canvas {:class "otent-canvas" :id "otent-globe"
                 :aria-label "3D globe showing live public signals"}]
       (when (= :globe view) [globe-overlay m])]
      [dispatch-view view m]]]])

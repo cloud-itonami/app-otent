@@ -1,11 +1,11 @@
-(ns app-tenkyu.views-test
+(ns app-otent.views-test
   "The views, rendered as data. No browser, no GPU, no DOM."
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
             [jp-go-dds.tokens :as tokens]
-            [app-tenkyu.views :as views]
-            [app-tenkyu.route :as route]
-            [app-tenkyu.db :as db]))
+            [app-otent.views :as views]
+            [app-otent.route :as route]
+            [app-otent.db :as db]))
 
 (defn- render
   "The view tree as the SERVER produces it -- function components resolved.
@@ -55,13 +55,13 @@
   (doseq [v route/views]
     (let [rendered (render (views/app (assoc model :view (:id v))))
           flat (flatten-hiccup rendered)]
-      (is (some #(= "tenkyu-globe" %) flat)
+      (is (some #(= "otent-globe" %) flat)
           (str "the canvas is missing from the " (:id v) " view"))))
   (testing "and it is HIDDEN, not unmounted, when the globe is not showing"
     (let [t (str (render (views/app (assoc model :view :sources))))]
-      (is (str/includes? t "tenkyu-stage--hidden")))
+      (is (str/includes? t "otent-stage--hidden")))
     (let [t (str (render (views/app (assoc model :view :globe))))]
-      (is (not (str/includes? t "tenkyu-stage--hidden"))))))
+      (is (not (str/includes? t "otent-stage--hidden"))))))
 
 (deftest the-nav-holds-every-nav-view-and-exactly-one-current
   (let [h (views/nav :objects)

@@ -1,9 +1,9 @@
-(ns app-tenkyu.db-test
+(ns app-otent.db-test
   (:require [clojure.test :refer [deftest is testing]]
-            [app-tenkyu.db :as db]))
+            [app-otent.db :as db]))
 
 (deftest unavailable-does-not-collapse-into-loaded-zero
-  ;; The distinction the whole app is built to preserve: `tenkyu` reports
+  ;; The distinction the whole app is built to preserve: `otent` reports
   ;; vessels as UNMEASURED because nothing has ever read that feed. A layer
   ;; that could not be answered must not look like a layer that was answered
   ;; and found nothing.

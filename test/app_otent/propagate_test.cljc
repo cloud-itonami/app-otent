@@ -1,6 +1,6 @@
-(ns app-tenkyu.propagate-test
+(ns app-otent.propagate-test
   (:require [clojure.test :refer [deftest is testing]]
-            [app-tenkyu.propagate :as prop]))
+            [app-otent.propagate :as prop]))
 
 ;; Real element sets, fetched from CelesTrak 2026-08-26. The GEO one is
 ;; here because it must be REFUSED, and a fixture with only near-earth

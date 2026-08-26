@@ -7,14 +7,14 @@
 // load a document, and that app state survives the crossing.
 import { chromium } from 'playwright';
 
-const BASE = process.argv[2] || 'https://app-tenkyu.04-feasts-minded.workers.dev';
+const BASE = process.argv[2] || 'https://app-otent.04-feasts-minded.workers.dev';
 const results = [];
 const check = (name, ok, detail = '') => {
   results.push({ name, ok, detail });
   console.log(`${ok ? '  ok  ' : '  FAIL'} ${name}${detail ? ' :: ' + detail : ''}`);
 };
 
-const EXECUTABLE = process.env.TENKYU_CHROME;   // full Chrome for Testing, not the headless shell
+const EXECUTABLE = process.env.OTENT_CHROME;   // full Chrome for Testing, not the headless shell
 
 const browser = await chromium.launch({
   ...(EXECUTABLE ? { executablePath: EXECUTABLE } : {}),
@@ -39,7 +39,7 @@ page.on('response', r => {
 });
 page.on('console', m => {
   if (m.type() !== 'error') return;
-  // The fire and vessel layers are 404 BY DESIGN -- `tenkyu` reports them
+  // The fire and vessel layers are 404 BY DESIGN -- `otent` reports them
   // as UNMEASURED and the app renders that. Chrome logs every 404 as a
   // console error, so counting those would make the expected outcome look
   // like a fault. Anything else is a real error.
@@ -51,8 +51,8 @@ await page.goto(BASE, { waitUntil: 'networkidle', timeout: 120000 });
 
 // --- the document the SERVER sent, before any script ran
 const ssr = await page.content();
-check('server-rendered document names the app', ssr.includes('tenkyu'));
-check('server-rendered document has the canvas', ssr.includes('tenkyu-canvas'));
+check('server-rendered document names the app', ssr.includes('otent'));
+check('server-rendered document has the canvas', ssr.includes('otent-canvas'));
 
 // --- the renderer actually started, and says which one
 //
@@ -61,13 +61,13 @@ check('server-rendered document has the canvas', ssr.includes('tenkyu-canvas'));
 // chosen, which is BEFORE the first frame has drawn -- reading the canvas
 // there returns an unsized 300x150 default, and that is what an earlier
 // version of this file measured and reported as "nothing drawn".
-await page.waitForFunction(() => (window.__tenkyu?.frames ?? 0) > 30, { timeout: 90000 });
-const framesA = await page.evaluate(() => window.__tenkyu.frames);
+await page.waitForFunction(() => (window.__otent?.frames ?? 0) > 30, { timeout: 90000 });
+const framesA = await page.evaluate(() => window.__otent.frames);
 await page.waitForTimeout(1000);
 check('the render loop is alive, not stopped after one frame',
-      (await page.evaluate(() => window.__tenkyu.frames)) > framesA + 5,
-      `frames ${framesA} -> ${await page.evaluate(() => window.__tenkyu.frames)}`);
-const plaque = await page.locator('.tenkyu-plaque').first().innerText();
+      (await page.evaluate(() => window.__otent.frames)) > framesA + 5,
+      `frames ${framesA} -> ${await page.evaluate(() => window.__otent.frames)}`);
+const plaque = await page.locator('.otent-plaque').first().innerText();
 const backend = (plaque.match(/renderer: (\w+)/) || [])[1];
 check('a GPU backend was chosen', ['webgpu', 'webgl2'].includes(backend), `backend=${backend}`);
 check('WebGPU was preferred, not silently skipped', backend === 'webgpu',
@@ -82,7 +82,7 @@ check('WebGPU was preferred, not silently skipped', backend === 'webgpu',
 // indistinguishable from a blank canvas, so this check has to use the path
 // that actually sees the composited frame.
 const drew = await page.evaluate(async () => {
-  const c = document.getElementById('tenkyu-globe');
+  const c = document.getElementById('otent-globe');
   if (!c) return { err: 'no canvas' };
   const url = c.toDataURL('image/png');
   const img = new Image();
@@ -113,44 +113,44 @@ check('every raster tile request succeeded', rasterTiles.every(s => s === 200),
 // --- the lake actually reached the browser
 await page.waitForFunction(
   () => /satellite: \d+/.test(document.body.innerText), { timeout: 90000 }).catch(() => {});
-const plaque2 = await page.locator('.tenkyu-plaque').first().innerText();
+const plaque2 = await page.locator('.otent-plaque').first().innerText();
 check('satellites arrived from the lake', /satellite: [1-9]/.test(plaque2), plaque2.replace(/\n/g, ' | '));
 check('an UNMEASURED layer is named as such, not shown as empty',
       /UNMEASURED/.test(plaque2));
 
 // --- single page: crossing a view must NOT load a document
-await page.evaluate(() => { window.__tenkyuMark = 'survived'; });
+await page.evaluate(() => { window.__otentMark = 'survived'; });
 await page.click('a[href="#sources"]');
 // Wait for something that exists ONLY in the sources view. Waiting on
 // something both views have returns before the crossing renders.
 await page.waitForFunction(
   () => document.body.innerText.includes('Natural Earth'), { timeout: 20000 });
-const mark = await page.evaluate(() => window.__tenkyuMark);
+const mark = await page.evaluate(() => window.__otentMark);
 check('crossing a view did not load a document', mark === 'survived', `mark=${mark}`);
 check('the sources view credits its feeds',
       (await page.content()).includes('CelesTrak'));
 
 // --- and back, with the GPU still alive
 await page.click('a[href="#globe"]');
-await page.waitForFunction(() => !!document.getElementById('tenkyu-globe'), { timeout: 20000 });
-const backend2 = ((await page.locator('.tenkyu-plaque').first().innerText())
+await page.waitForFunction(() => !!document.getElementById('otent-globe'), { timeout: 20000 });
+const backend2 = ((await page.locator('.otent-plaque').first().innerText())
                   .match(/renderer: (\w+)/) || [])[1];
 check('the GPU device survived the crossing', backend2 === backend, `${backend} -> ${backend2}`);
 // Stronger: the canvas must not have been REBUILT. `reattached` counts how
 // many times the renderer found the node it held was no longer in the page.
 // One is the initial client render replacing the server-rendered document;
 // more than that means a view crossing is destroying the GPU device.
-const reattached = await page.evaluate(() => window.__tenkyu.reattached ?? 0);
+const reattached = await page.evaluate(() => window.__otent.reattached ?? 0);
 check('the renderer was never rebuilt -- not on the initial commit, not on a crossing',
       reattached === 0, `reattached=${reattached}`);
 check('the basemap tiles stayed resident across the crossing',
-      (await page.evaluate(() => window.__tenkyu.glTiles ?? -1)) !== 0,
-      `tiles after crossing: ${await page.evaluate(() => window.__tenkyu.glTiles ?? 'n/a (webgpu)')}`);
+      (await page.evaluate(() => window.__otent.glTiles ?? -1)) !== 0,
+      `tiles after crossing: ${await page.evaluate(() => window.__otent.glTiles ?? 'n/a (webgpu)')}`);
 
 check('no uncaught page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
 await page.screenshot({ path: 'test/browser/globe.png' });
-await page.locator('#tenkyu-globe').screenshot({ path: 'test/browser/globe-canvas.png' });
+await page.locator('#otent-globe').screenshot({ path: 'test/browser/globe-canvas.png' });
 
 // ---------------------------------------------------------------------------
 // Buildings.
@@ -158,15 +158,15 @@ await page.locator('#tenkyu-globe').screenshot({ path: 'test/browser/globe-canva
 // Reached through the fly-to button, which is GENERATED from the buildings
 // manifest -- so this also checks that a city in the bucket has a way to be
 // seen. Zooming by hand instead would test the wheel, not the feature.
-const tilesBefore = await page.evaluate(() => window.__tenkyu.glTiles ?? null);
+const tilesBefore = await page.evaluate(() => window.__otent.glTiles ?? null);
 const flyBtn = page.getByTitle('fly to New York (Manhattan)');
 check('the manifest produced a fly-to control', await flyBtn.count() > 0);
 if (await flyBtn.count() > 0) {
   await flyBtn.click();
-  await page.waitForFunction(() => (window.__tenkyu?.buildings ?? 0) > 0, { timeout: 60000 })
+  await page.waitForFunction(() => (window.__otent?.buildings ?? 0) > 0, { timeout: 60000 })
     .catch(() => {});
   await page.waitForTimeout(5000);
-  const d = await page.evaluate(() => window.__tenkyu);
+  const d = await page.evaluate(() => window.__otent);
   check('building footprints loaded from the lake', (d.buildings ?? 0) > 1000,
         `buildings=${d.buildings}`);
   check('ground polygons loaded with them', (d.surface ?? 0) > 0, `surface=${d.surface}`);
@@ -180,7 +180,7 @@ if (await flyBtn.count() > 0) {
         `glTiles=${d.glTiles} gpuTiles=${d.gpuTiles}`);
   check('descending did NOT leave the whole planet resident', resident < 40,
         `tiles ${tilesBefore ?? '?'} -> ${resident}`);
-  await page.locator('#tenkyu-globe').screenshot({ path: 'test/browser/city-webgpu.png' });
+  await page.locator('#otent-globe').screenshot({ path: 'test/browser/city-webgpu.png' });
 
   // Flying back out must CLEAR the city, or it stays welded to the globe.
   //
@@ -190,11 +190,11 @@ if (await flyBtn.count() > 0) {
   // probe of the same build showed buildings going 7821 -> 0 and resident
   // tiles 7 -> 1. The application was right and the test was driving it in
   // a way no user does.
-  const box = await page.locator('#tenkyu-globe').boundingBox();
+  const box = await page.locator('#otent-globe').boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   for (let i = 0; i < 25; i++) { await page.mouse.wheel(0, 800); await page.waitForTimeout(30); }
   await page.waitForTimeout(5000);
-  const out = await page.evaluate(() => window.__tenkyu);
+  const out = await page.evaluate(() => window.__otent);
   check('leaving the area cleared the buildings', (out.buildings ?? -1) === 0,
         `buildings=${out.buildings}`);
   check('and released their GPU buffers', (out.gpuBuildings ?? out.glBuildings ?? -1) === 0,
@@ -214,8 +214,8 @@ await page2.addInitScript(() => {
   Object.defineProperty(navigator, 'gpu', { get: () => undefined, configurable: true });
 });
 await page2.goto(BASE, { waitUntil: 'networkidle', timeout: 120000 });
-await page2.waitForFunction(() => (window.__tenkyu?.frames ?? 0) > 30, { timeout: 90000 });
-const plaqueB = await page2.locator('.tenkyu-plaque').first().innerText();
+await page2.waitForFunction(() => (window.__otent?.frames ?? 0) > 30, { timeout: 90000 });
+const plaqueB = await page2.locator('.otent-plaque').first().innerText();
 const backendB = (plaqueB.match(/renderer: (\w+)/) || [])[1];
 check('without WebGPU the renderer falls back to WebGL 2', backendB === 'webgl2',
       `backend=${backendB}`);
@@ -232,12 +232,12 @@ check('without WebGPU the renderer falls back to WebGL 2', backendB === 'webgl2'
 // Turning `preserveDrawingBuffer` on to make the read work would slow
 // every production frame to serve a test. Screenshotting the element is
 // what a viewer sees anyway.
-const shotB = await page2.locator('#tenkyu-globe').screenshot();
+const shotB = await page2.locator('#otent-globe').screenshot();
 const shotBlank = await page2.evaluate(async () => {
   // A same-size canvas holding only the clear colour, encoded the same
   // way, as the floor to compare against. Without it "is 40 KB a lot?" is
   // a number somebody guessed.
-  const live = document.getElementById('tenkyu-globe');
+  const live = document.getElementById('otent-globe');
   const c = document.createElement('canvas');
   c.width = live.clientWidth; c.height = live.clientHeight;
   const x = c.getContext('2d');
@@ -249,7 +249,7 @@ check('the fallback draws far more than a cleared rectangle',
       shotB.length > shotBlank * 4,
       `png ${shotB.length}B vs a flat fill of the same size ~${shotBlank}B`);
 
-const diagGl = await page2.evaluate(() => window.__tenkyu);
+const diagGl = await page2.evaluate(() => window.__otent);
 check('the fallback submitted geometry with no GL error',
       diagGl.glError === 0 && diagGl.glTiles > 0 &&
       diagGl.glMarkers > 0 && diagGl.glLines > 0,
@@ -258,12 +258,12 @@ check('the fallback submitted geometry with no GL error',
 
 const diagB = diagGl;
 check('the fallback drew the same object count as WebGPU',
-      diagB.objects === (await page.evaluate(() => window.__tenkyu.objects)),
-      `webgl2=${diagB.objects} webgpu=${await page.evaluate(() => window.__tenkyu.objects)}`);
+      diagB.objects === (await page.evaluate(() => window.__otent.objects)),
+      `webgl2=${diagB.objects} webgpu=${await page.evaluate(() => window.__otent.objects)}`);
 check('the fallback sized its canvas the same way', /^\d+x\d+$/.test(diagB.canvas),
       `canvas=${diagB.canvas}`);
 await page2.screenshot({ path: 'test/browser/globe-webgl2.png' });
-await page2.locator('#tenkyu-globe').screenshot({ path: 'test/browser/globe-webgl2-canvas.png' });
+await page2.locator('#otent-globe').screenshot({ path: 'test/browser/globe-webgl2-canvas.png' });
 
 await browser.close();
 

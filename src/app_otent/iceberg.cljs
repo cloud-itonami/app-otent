@@ -1,4 +1,4 @@
-(ns app-tenkyu.iceberg
+(ns app-otent.iceberg
   "Reading an Apache Iceberg table out of Cloudflare R2, in ClojureScript.
 
   Four steps, all of them the ones a real Iceberg client takes:
@@ -28,7 +28,7 @@
   `/v1/config` and so does this; hard-coding the warehouse name there
   returns HTTP 500 from Cloudflare, and guessing it returns 404. Measured
   both, 2026-08-26."
-  (:require [app-tenkyu.iceberg-id :as ice-id]
+  (:require [app-otent.iceberg-id :as ice-id]
             [avro.binary :as abin]
             [avro.file :as avro]
             [parquet.source :as pq]
@@ -91,7 +91,7 @@
                               :else
                               (let [ml (get snap "manifest-list")]
                                 {:ok? true
-                                 ;; See `app-tenkyu.iceberg-id`: the id comes
+                                 ;; See `app-otent.iceberg-id`: the id comes
                                  ;; from the manifest-list NAME, because
                                  ;; JSON.parse cannot hold a 64-bit one.
                                  :snapshot-id (ice-id/snapshot-id ml snap-id)

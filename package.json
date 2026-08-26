@@ -1,8 +1,8 @@
 {
-  "name": "@cloud-itonami/app-tenkyu",
+  "name": "@cloud-itonami/app-otent",
   "version": "0.1.0",
   "private": true,
-  "description": "tenkyu - live public spatial intelligence on a WebGPU globe, read from Cloudflare R2 Data Catalog",
+  "description": "otent - live public spatial intelligence on a WebGPU globe, read from Cloudflare R2 Data Catalog",
   "scripts": {
     "test": "nbb --classpath src:test:../../kotoba-lang/geo/src:../../kotoba-lang/sgp4/src:../../kotoba-lang/jp-go-digital-design-system/src:../../kotoba-lang/html/src:../../kotoba-lang/css/src test/run.cljs",
     "build:worker": "node ../../../scripts/resource-guard.mjs run build -- npx shadow-cljs release worker",

@@ -1,4 +1,4 @@
-(ns app-tenkyu.globe.scene
+(ns app-otent.globe.scene
   "Where things are on the globe, and where the camera is looking.
 
   Pure. No GPU type, no canvas, no `js/`. Both backends -- WebGPU and
@@ -280,7 +280,7 @@
   "Building records from the lake -> one merged mesh, in the globe frame.
 
   Each record is `{:h height-m :b base-m :r [lon lat lon lat ...]}`, which
-  is what `tenkyu`'s buildings ingest writes. The extrusion itself is
+  is what `otent`'s buildings ingest writes. The extrusion itself is
   `kotoba.geo.mesh/globe-polygon-to-extrude-earcut` -- deriving sphere
   positions here instead would put the walls in a different frame from the
   tiles under them.

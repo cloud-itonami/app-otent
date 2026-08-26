@@ -1,4 +1,4 @@
-(ns app-tenkyu.propagate
+(ns app-otent.propagate
   "Satellites, from element sets to points on the globe, in the browser.
 
   This is why the satellite table holds twenty-one rows a day instead of

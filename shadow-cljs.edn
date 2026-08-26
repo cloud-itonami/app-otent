@@ -39,7 +39,7 @@
  :builds
  {:worker {:target :esm
            :output-dir "dist"
-           :modules {:worker {:exports {default app-tenkyu.worker/handler}}}
+           :modules {:worker {:exports {default app-otent.worker/handler}}}
            :compiler-options {:output-feature-set :es2020
                               :infer-externs :auto
                               :warnings-as-errors true}}
@@ -48,7 +48,7 @@
         :output-dir "public"
         ;; No `:exports` -- an empty map fails shadow's spec, and this
         ;; module exports nothing: it is loaded for its `:init-fn`.
-        :modules {:app {:init-fn app-tenkyu.core/init}}
+        :modules {:app {:init-fn app-otent.core/init}}
         :compiler-options {:output-feature-set :es2020
                            :infer-externs :auto
                            :warnings-as-errors true}}}}

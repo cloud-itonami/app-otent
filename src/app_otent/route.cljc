@@ -1,4 +1,4 @@
-(ns app-tenkyu.route
+(ns app-otent.route
   "Views as data, and the fragment that addresses them.
 
   Pure `.cljc` so addressability is testable without a browser; only the

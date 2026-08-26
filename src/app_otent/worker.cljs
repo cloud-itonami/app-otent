@@ -1,10 +1,10 @@
-(ns app-tenkyu.worker
+(ns app-otent.worker
   "The Cloudflare Worker: one document, one bundle, and the read API.
 
   The **only** namespace that touches a Request or a Response. Routing is
-  `app-tenkyu.route` (shared with the browser), the page is
-  `app-tenkyu.views` (shared with the browser), and the lake is
-  `app-tenkyu.iceberg`.
+  `app-otent.route` (shared with the browser), the page is
+  `app-otent.views` (shared with the browser), and the lake is
+  `app-otent.iceberg`.
 
   ## The page is server-rendered, and it is the same page
 
@@ -23,10 +23,10 @@
   (:require [clojure.string :as str]
             [jp-go-dds.page :as page]
             [jp-go-dds.tokens :as tokens]
-            [app-tenkyu.api :as api]
-            [app-tenkyu.route :as route]
-            [app-tenkyu.views :as views]
-            [app-tenkyu.db :as db]
+            [app-otent.api :as api]
+            [app-otent.route :as route]
+            [app-otent.views :as views]
+            [app-otent.db :as db]
             [shadow.resource :as rc]))
 
 (def ^:private dds-css
@@ -65,7 +65,7 @@
   not the globe followed by a flicker."
   [view]
   (page/->page
-   {:title "\u5929\u7403 tenkyu \u2014 live public spatial intelligence"
+   {:title "\u304a\u5929\u9053\u69d8 otent \u2014 live public spatial intelligence"
     :description (str "Satellites, earthquakes, aircraft, fires and vessels "
                       "on a WebGPU globe, read from Cloudflare R2 Data Catalog.")
     :lang "ja"

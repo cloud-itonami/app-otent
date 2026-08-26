@@ -1,4 +1,4 @@
-(ns app-tenkyu.db
+(ns app-otent.db
   "The app database, and the pure functions over it.
 
   Pure `.cljc`: every question the UI asks -- what is loaded, what

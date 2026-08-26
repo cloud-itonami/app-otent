@@ -1,9 +1,9 @@
-(ns app-tenkyu.core
+(ns app-otent.core
   "The browser entry point: one mount, one render loop.
 
   Everything here is glue. The scene is computed by
-  `app-tenkyu.globe.scene`, the propagation by `app-tenkyu.propagate`, the
-  state transitions by `app-tenkyu.db` -- all pure and all tested. This
+  `app-otent.globe.scene`, the propagation by `app-otent.propagate`, the
+  state transitions by `app-otent.db` -- all pure and all tested. This
   file owns the canvas, the animation frame and the pointer, and nothing
   else.
 
@@ -17,13 +17,13 @@
             [reagent.dom.client :as rdc]
             [re-frame.core :as rf]
             [re-frame.db :as rf-db]
-            [app-tenkyu.db :as db]
-            [app-tenkyu.events :as events]
-            [app-tenkyu.subs :as subs]
-            [app-tenkyu.views :as views]
-            [app-tenkyu.route :as route]
-            [app-tenkyu.globe.renderer :as renderer]
-            [app-tenkyu.globe.scene :as scene]))
+            [app-otent.db :as db]
+            [app-otent.events :as events]
+            [app-otent.subs :as subs]
+            [app-otent.views :as views]
+            [app-otent.route :as route]
+            [app-otent.globe.renderer :as renderer]
+            [app-otent.globe.scene :as scene]))
 
 (defonce ^{:doc "The GPU side, kept out of the re-frame db: a device, a
   texture cache and a set of buffers are not values, and putting them in
@@ -43,9 +43,9 @@
   apart, and it is why `test/browser/smoke.mjs` can assert the loop is
   ALIVE rather than inferring it from pixels."
   [k v]
-  (let [d (or (aget js/window "__tenkyu") #js {})]
+  (let [d (or (aget js/window "__otent") #js {})]
     (aset d (name k) v)
-    (aset js/window "__tenkyu" d)))
+    (aset js/window "__otent" d)))
 
 (defn- live-canvas
   "The canvas that is in the document RIGHT NOW.
@@ -62,7 +62,7 @@
   exactly one canvas, unsized at 300x150, showing nothing. Nothing errored,
   because nothing was wrong: the GPU was drawing into a detached node."
   []
-  (.getElementById js/document "tenkyu-globe"))
+  (.getElementById js/document "otent-globe"))
 
 (defn- tile-key [{:keys [z x y]}] (str z "/" x "/" y))
 
@@ -123,7 +123,7 @@
             (renderer/set-surface! state nil)
             ;; The diagnostic must be cleared HERE too. It was set only on
             ;; the load path, so flying out of a city cleared the mesh and
-            ;; left `buildings: 7821` on `window.__tenkyu` -- and the
+            ;; left `buildings: 7821` on `window.__otent` -- and the
             ;; browser test read that as the city still being drawn.
             ;; A stale instrument and a stale scene look identical.
             (diag! :buildings 0)
@@ -168,7 +168,7 @@
   Reading the atom and applying the same pure functions is also simply
   what this loop wants: `db/visible-objects` is a function of a map."
   [_ts]
-  (diag! :frames (inc (or (some-> (aget js/window "__tenkyu") (aget "frames")) 0)))
+  (diag! :frames (inc (or (some-> (aget js/window "__otent") (aget "frames")) 0)))
   (let [{:keys [state]} @gpu]
     ;; If the node we hold is no longer the node in the page, rebuild on the
     ;; live one. Guarded by `:starting?`, so this cannot storm.
@@ -236,7 +236,7 @@
       (swap! gpu assoc :starting? true)
       (when (:state @gpu)
         (diag! :reattached
-               (inc (or (some-> (aget js/window "__tenkyu") (aget "reattached")) 0))))
+               (inc (or (some-> (aget js/window "__otent") (aget "reattached")) 0))))
       (renderer/resize! canvas)
       (-> (renderer/create canvas)
           (.then (fn [state]

@@ -1,11 +1,11 @@
 (ns run
   (:require [clojure.test :as t]
-            [app-tenkyu.scene-test]
-            [app-tenkyu.route-test]
-            [app-tenkyu.propagate-test]
-            [app-tenkyu.db-test]
-            [app-tenkyu.views-test]
-            [app-tenkyu.iceberg-test]))
+            [app-otent.scene-test]
+            [app-otent.route-test]
+            [app-otent.propagate-test]
+            [app-otent.db-test]
+            [app-otent.views-test]
+            [app-otent.iceberg-test]))
 
 (defmethod t/report [:cljs.test/default :end-run-tests] [m]
   (println)
@@ -18,4 +18,4 @@
     (t/successful? m) (println "OK")
     :else (set! (.-exitCode js/process) 1)))
 
-(t/run-tests 'app-tenkyu.scene-test 'app-tenkyu.route-test 'app-tenkyu.propagate-test 'app-tenkyu.db-test 'app-tenkyu.views-test 'app-tenkyu.iceberg-test)
+(t/run-tests 'app-otent.scene-test 'app-otent.route-test 'app-otent.propagate-test 'app-otent.db-test 'app-otent.views-test 'app-otent.iceberg-test)

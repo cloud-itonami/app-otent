@@ -3,11 +3,11 @@
 **A spy-satellite view of the planet, drawn from a data lake instead of a
 vendor's API.**
 
-Live at **https://app-tenkyu.04-feasts-minded.workers.dev**
+Live at **https://app-otent.04-feasts-minded.workers.dev**
 
 Satellites, earthquakes, aircraft, fires and vessels on a WebGPU globe.
 Every mark, and the Earth underneath it, comes out of Cloudflare R2 Data
-Catalog — ingested by [`cloud-itonami/tenkyu`](https://github.com/cloud-itonami/tenkyu),
+Catalog — ingested by [`cloud-itonami/otent`](https://github.com/cloud-itonami/otent),
 governed, and read back through this Worker. **The browser never talks to
 CelesTrak, OpenSky, USGS, NASA or Google.**
 
@@ -196,7 +196,7 @@ and `toDataURL` returns a blank one for a **WebGL** canvas without
 ## Layout
 
 ```
-src/app_tenkyu/
+src/app_otent/
   route.cljc          views as data; the nav is generated from them   (shared)
   db.cljc             app state and every question the UI asks        (shared)
   views.cljc          jp-go-dds hiccup, and the SSR expander          (shared)
