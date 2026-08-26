@@ -145,12 +145,29 @@
    (let [sats (get-in d [:layers :satellite :sats])
          d (assoc-in d [:clock :now] now)]
      (if (seq sats)
-       (let [{:keys [objects failed]} (prop/positions sats now)]
+       ;; A SLICE per advance, not the whole catalogue. SGP4 measured at
+       ;; 18.2 us, so 15,258 element sets would be 278 ms per frame; 512 is
+       ;; about 9 ms and the whole sky refreshes in half a second. See
+       ;; `app-otent.propagate/slice-size` for how that number was chosen.
+       ;;
+       ;; The maps are carried forward rather than rebuilt: a satellite
+       ;; outside this slice keeps the position it last had. Rebuilding from
+       ;; the slice would strobe the star field, and the refusal count would
+       ;; read zero for twenty-nine advances out of thirty.
+       (let [{:keys [by-id failed-by-id cursor]}
+             (prop/positions-slice sats
+                                   (get-in d [:layers :satellite :by-id] {})
+                                   (get-in d [:layers :satellite :stale-by-id] {})
+                                   now
+                                   (get-in d [:layers :satellite :cursor] 0))]
          (-> d
-             (assoc-in [:layers :satellite :objects] objects)
+             (assoc-in [:layers :satellite :by-id] by-id)
+             (assoc-in [:layers :satellite :cursor] cursor)
+             (assoc-in [:layers :satellite :objects] (vec (vals by-id)))
              ;; REPLACED, not accumulated. `into` here would append the same
              ;; stale satellites sixty times a second and the refusal count
              ;; would climb forever -- a counter that only goes up reads as a
              ;; worsening problem rather than as a constant one.
-             (assoc-in [:layers :satellite :stale] failed)))
+             (assoc-in [:layers :satellite :stale-by-id] failed-by-id)
+             (assoc-in [:layers :satellite :stale] (vec (vals failed-by-id)))))
        d))))

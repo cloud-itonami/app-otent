@@ -80,3 +80,71 @@
                 g (frames/subpoint p jd frac)]
             (recur (+ t step-min)
                    (conj out [(:lon-deg g) (:lat-deg g)]))))))))
+
+;; ── amortised propagation ────────────────────────────────────────────────────
+
+(def slice-size
+  "How many satellites are propagated per advance.
+
+  `positions` propagates every satellite on every advance, which is right
+  for twenty-one and impossible for fifteen thousand: SGP4 measured at
+  **18.2 µs** per propagation on this machine, so the full CelesTrak
+  `active` catalogue — 15,258 of 16,057 element sets, the other 799 being
+  deep-space and refused rather than propagated wrongly — would cost 278 ms
+  per frame. A 16.7 ms frame fits 917.
+
+  So a slice moves each advance and the rest keep the position they last
+  had. 512 is ~9 ms at the measured rate, and browsers are typically faster
+  than nbb; the whole catalogue refreshes every 30 advances, about half a
+  second. At 7.5 km/s that is 3.7 km of drift, and at full-globe zoom the
+  screen is roughly 18 km per pixel, so it is a fifth of a pixel.
+
+  This is the number to change if the star field looks like it is stepping.
+  Raising it costs frame time linearly; lowering it costs refresh latency
+  linearly."
+  512)
+
+(defn positions-slice
+  "Propagate `slice-size` satellites starting at `cursor`, over `prev`.
+
+  `prev` and `prev-failed` are maps keyed by satnum. Returns
+  `{:by-id :failed-by-id :cursor}`.
+
+  **A satellite not in this slice keeps its last position rather than
+  disappearing.** The alternative — returning only what was computed —
+  would make the star field strobe, and worse, a reader counting objects
+  would see a number that swings with the slice rather than with the sky.
+
+  The same holds for refusals: a stale element set stays in `failed-by-id`
+  until its satellite is revisited and either succeeds or fails again.
+  Rebuilding that map from the slice alone would report four stale
+  satellites as zero for twenty-nine advances out of thirty."
+  ([sats prev prev-failed unix-ms cursor]
+   (positions-slice sats prev prev-failed unix-ms cursor slice-size))
+  ([sats prev prev-failed unix-ms cursor take-size]
+  (let [n (count sats)]
+    (if (zero? n)
+      {:by-id prev :failed-by-id prev-failed :cursor 0}
+      (let [[jd frac] (stime/unix-ms->jd unix-ms)
+            take-n (min take-size n)]
+        (loop [i 0, c (mod cursor n), by prev, bad prev-failed]
+          (if (>= i take-n)
+            {:by-id by :failed-by-id bad :cursor c}
+            (let [sat (nth sats c)
+                  id (:satnum sat)
+                  p (sgp4/propagate-at sat unix-ms)]
+              (if-not (:ok? p)
+                (recur (inc i) (mod (inc c) n)
+                       (dissoc by id)
+                       (assoc bad id {:id id :name (:display-name sat) :error (:error p)}))
+                (let [g (frames/subpoint p jd frac)]
+                  (recur (inc i) (mod (inc c) n)
+                         (assoc by id {:id id
+                                       :name (:display-name sat)
+                                       :kind :satellite
+                                       :lat-deg (:lat-deg g)
+                                       :lon-deg (:lon-deg g)
+                                       :alt-km (:alt-km g)
+                                       :speed-km-s (:speed-km-s g)
+                                       :size 5.0})
+                         (dissoc bad id))))))))))))

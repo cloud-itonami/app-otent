@@ -72,3 +72,55 @@
         (let [dlon (Math/abs (- lon2 lon1))]
           (is (or (< dlon 20.0) (> dlon 340.0))
               (str "longitude jumped from " lon1 " to " lon2)))))))
+
+;; ── amortised propagation ────────────────────────────────────────────────────
+
+(deftest a-satellite-outside-the-slice-keeps-its-last-position
+  (testing "the whole point of amortising: returning only what was computed
+            would strobe the star field, and a reader counting objects would
+            see a number that swings with the slice rather than with the sky"
+    (let [prev {25544 {:id 25544 :lat-deg 1.0 :lon-deg 2.0 :kind :satellite}
+                99999 {:id 99999 :lat-deg 3.0 :lon-deg 4.0 :kind :satellite}}
+          r (prop/positions-slice [] prev {} 1787726417000 0)]
+      (is (= prev (:by-id r))
+          "an empty satellite list dropped positions that were already known"))))
+
+(deftest the-cursor-advances-and-eventually-covers-everything
+  (testing "a cursor that stalls repropagates the same slice forever and
+            never reaches the rest -- and because every satellite outside
+            the slice keeps its last position, a stalled cursor looks
+            exactly like a working one on screen"
+    (let [n 10
+          fake (mapv (fn [i] {:satnum i :display-name (str i)}) (range n))
+          step 3]
+      (let [c1 (:cursor (prop/positions-slice fake {} {} 1787726417000 0 step))]
+        (is (= 3 c1) "the cursor did not advance by the slice size"))
+      ;; four steps of three over ten wraps past the end and back
+      (let [cs (reductions (fn [c _] (:cursor (prop/positions-slice fake {} {} 1787726417000 c step)))
+                           0 (range 4))]
+        (is (= [0 3 6 9 2] (vec cs))
+            (str "the cursor did not walk and wrap: " (pr-str (vec cs)))))
+      (testing "and every satellite is visited within ceil(n/step) advances"
+        (let [seen (loop [c 0 i 0 acc #{}]
+                     (if (>= i 4)
+                       acc
+                       (let [r (prop/positions-slice fake {} {} 1787726417000 c step)]
+                         (recur (:cursor r) (inc i) (into acc (keys (:failed-by-id r)))))))]
+          (is (= (set (range n)) seen)
+              (str "not every satellite was reached: " (pr-str (sort seen)))))))))
+
+(deftest a-refusal-clears-when-the-satellite-succeeds-again
+  (testing "and a stale entry survives the advances where its satellite is
+            not in the slice -- rebuilding the map from the slice alone
+            would report four stale satellites as zero most of the time"
+    (let [prev-failed {123 {:id 123 :error :sgp4/decayed}}
+          r (prop/positions-slice [] {} prev-failed 1787726417000 0)]
+      (is (= prev-failed (:failed-by-id r))))))
+
+(deftest the-slice-size-is-a-number-someone-chose
+  (testing "measured at 18.2 us per propagation, so 15,258 satellites is
+            278 ms/frame and a 16.7 ms frame fits 917"
+    (is (number? prop/slice-size))
+    (is (pos? prop/slice-size))
+    (is (< prop/slice-size 2000)
+        "a slice that large stops being amortisation")))
