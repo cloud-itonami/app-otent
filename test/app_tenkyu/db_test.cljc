@@ -41,7 +41,11 @@
     (let [r (db/clamp-camera c)]
       (is (<= -89.9 (:lat-deg r) 89.9) (str c))
       (is (<= -180.0 (:lon-deg r) 180.0) (str c))
-      (is (<= 1.05 (:distance r) 40.0) (str c)))))
+      ;; The bounds are the CONSTANTS, not literals. Written as 1.05 and 40
+      ;; they broke when the floor was lowered so the ground could be
+      ;; reached -- for a reason unrelated to what this checks.
+      (is (<= db/min-camera-distance (:distance r) db/max-camera-distance) (str c))
+      (is (> (:distance r) 1.0) (str c " put the camera inside the planet")))))
 
 (deftest longitude-wraps-rather-than-clamping
   ;; Clamping longitude would stop the globe spinning at the antimeridian.
@@ -65,8 +69,8 @@
     (testing "and no amount of scrolling escapes the bounds"
       (let [way-in (reduce (fn [c _] (db/zoom-camera c -1000)) c (range 50))
             way-out (reduce (fn [c _] (db/zoom-camera c 1000)) c (range 50))]
-        (is (>= (:distance way-in) 1.05))
-        (is (<= (:distance way-out) 40.0))))))
+        (is (>= (:distance way-in) db/min-camera-distance))
+        (is (<= (:distance way-out) db/max-camera-distance))))))
 
 (deftest every-kind-has-a-layer-from-the-start
   ;; A missing key renders as nil and the kind disappears from the UI

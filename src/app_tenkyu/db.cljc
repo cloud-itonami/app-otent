@@ -31,6 +31,7 @@
    :clock {:now nil :rate 1.0 :playing? true}
    :layers (into {} (map (fn [k] [k {:status :idle :objects [] :refused []}])) kinds)
    :basemap {:status :idle :manifest nil}
+   :buildings {:status :idle :areas []}
    :selected nil})
 
 (defn layer [db k] (get-in db [:layers k]))
@@ -95,6 +96,29 @@
 
 ;; ---------------------------------------------------------------- camera
 
+(def ^{:doc "How close the camera may get, in earth radii from the centre.
+
+  1.00005 is about **320 m above the surface** -- low enough to stand among
+  extruded buildings.
+
+  It was 1.05, which is 318 KILOMETRES up. Nothing was visibly wrong: the
+  globe looked right, dragging worked, zoom stopped somewhere reasonable.
+  But the building layer only requests footprints below 1.01, so the floor
+  sat entirely above the range where buildings exist and they could never
+  load, ever, on any machine. A constant that quietly excludes a feature is
+  the failure this pair of vars is named to prevent -- see
+  `scene/building-visible-distance` and the test that pins them together."}
+  min-camera-distance 1.00005)
+
+(def max-camera-distance 40.0)
+
+(def ^{:doc "Where `fly-to` puts the camera: about 2.5 km above the ground.
+
+  Below `scene/building-visible-distance` by a wide margin, so arriving
+  somewhere covered shows buildings immediately rather than requiring one
+  more scroll that a reader has no reason to expect."}
+  street-level-distance 1.0004)
+
 (defn clamp-camera
   "Keep the camera outside the planet and inside the poles.
 
@@ -107,16 +131,17 @@
          :lat-deg (max -89.9 (min 89.9 lat-deg))
          :lon-deg (let [l (mod (+ lon-deg 180.0) 360.0)]
                     (- (if (neg? l) (+ l 360.0) l) 180.0))
-         :distance (max 1.05 (min 40.0 distance))))
+         :distance (max min-camera-distance (min max-camera-distance distance))))
 
 (defn drag-camera
   "A pointer drag in pixels -> a new camera.
 
   The rotation per pixel shrinks with distance, so dragging near the
   surface moves the ground by roughly the distance dragged rather than
-  spinning the planet away."
+  spinning the planet away. Floored, because at 320 m up the scale factor
+  would otherwise be 1e-5 and the globe would not move at all."
   [camera dx dy]
-  (let [k (* 0.25 (min 1.0 (- (:distance camera) 1.0)))]
+  (let [k (max 0.0008 (* 0.25 (min 1.0 (- (:distance camera) 1.0))))]
     (clamp-camera (-> camera
                       (update :lon-deg - (* dx k))
                       (update :lat-deg + (* dy k))))))

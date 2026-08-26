@@ -13,7 +13,8 @@
   canvas and the GPU device are created once and survive every crossing,
   which is the point -- re-creating a WebGPU device per screen would make
   the globe blink on every click."
-  (:require [reagent.dom.client :as rdc]
+  (:require [clojure.string :as str]
+            [reagent.dom.client :as rdc]
             [re-frame.core :as rf]
             [re-frame.db :as rf-db]
             [app-tenkyu.db :as db]
@@ -27,7 +28,8 @@
 (defonce ^{:doc "The GPU side, kept out of the re-frame db: a device, a
   texture cache and a set of buffers are not values, and putting them in
   app-db would make every `assoc` walk them."}
-  gpu (atom {:state nil :tiles-at nil :lines-done? false}))
+  gpu (atom {:state nil :tiles-at nil :lines-done? false
+             :buildings-key nil :buildings-loading? false}))
 
 (defonce root (atom nil))
 
@@ -102,6 +104,55 @@
                    (renderer/set-lines! state (scene/line-vertices lines 0.0015)))))
         (.catch (fn [_] (swap! gpu assoc :lines-done? false))))))
 
+(defn- sync-buildings!
+  "Fetch and upload the building footprints for wherever the camera is.
+
+  Keyed on the SET of tiles in view, so moving within one block does no
+  work and leaving a covered area clears the mesh. Without the clear, the
+  last city stays welded to the globe and rotates with it.
+
+  Each tile is one R2 object the Worker serves; the MVT was decoded once
+  at ingest, so nothing here parses protobuf."
+  [state camera areas]
+  (let [tiles (scene/building-tiles-in-view camera areas)
+        k (str/join "," (map (fn [{:keys [z x y]}] (str z "/" x "/" y)) tiles))]
+    (when (and (not (:buildings-loading? @gpu)) (not= k (:buildings-key @gpu)))
+      (swap! gpu assoc :buildings-key k :buildings-loading? true)
+      (if (empty? tiles)
+        (do (renderer/set-buildings! state nil)
+            (renderer/set-surface! state nil)
+            ;; The diagnostic must be cleared HERE too. It was set only on
+            ;; the load path, so flying out of a city cleared the mesh and
+            ;; left `buildings: 7821` on `window.__tenkyu` -- and the
+            ;; browser test read that as the city still being drawn.
+            ;; A stale instrument and a stale scene look identical.
+            (diag! :buildings 0)
+            (diag! :surface 0)
+            (swap! gpu assoc :buildings-loading? false))
+        (-> (js/Promise.all
+             (clj->js (for [{:keys [z x y]} tiles]
+                        (-> (js/fetch (str "/api/basemap/buildings/" z "/" x "/" y ".json"))
+                            (.then (fn [r] (when (.-ok r) (.json r))))
+                            (.catch (constantly nil))))))
+            (.then (fn [results]
+                     (let [ok (remove nil? (array-seq results))
+                           records (mapcat #(js->clj (aget % "buildings") :keywordize-keys true) ok)
+                           ground (mapcat #(js->clj (or (aget % "surface") #js [])
+                                                    :keywordize-keys true) ok)
+                           mesh (scene/buildings->mesh records)
+                           ;; Lifted 1 m off the sphere. The raster tile is
+                           ;; drawn at exactly radius 1, and coplanar
+                           ;; surfaces z-fight into a shimmer that looks
+                           ;; like a driver bug.
+                           smesh (scene/surface->mesh ground (/ 1.0 6371000.0))]
+                       (diag! :buildings (count records))
+                       (diag! :surface (count ground))
+                       (renderer/set-surface! state (when (seq (:indices smesh)) smesh))
+                       (renderer/set-buildings! state (when (seq (:indices mesh)) mesh))
+                       (swap! gpu assoc :buildings-loading? false))))
+            (.catch (fn [_] (swap! gpu assoc :buildings-loading? false
+                                   :buildings-key nil))))))))
+
 (defn- frame!
   "One frame.
 
@@ -139,6 +190,7 @@
           (diag! :objects (count objects))
           (diag! :maxZoom max-zoom)
           (sync-tiles! state camera max-zoom)
+          (sync-buildings! state camera (get-in d [:buildings :areas]))
           (load-vector-lines! state)
           (renderer/set-markers! state (scene/marker-vertices objects))
           (renderer/draw! state
@@ -202,7 +254,8 @@
                     (swap! gpu assoc :starting? false)))))))
 
 (defn ui []
-  [views/app @(rf/subscribe [::subs/page-model])])
+  [views/app (assoc @(rf/subscribe [::subs/page-model])
+                    :on-fly #(rf/dispatch [::events/fly-to %]))])
 
 (defn- after-commit!
   "Run `f` once React has put its tree in the document.
@@ -227,5 +280,6 @@
                    (rf/dispatch [::events/set-view (:id v)])
                    (after-commit! start-globe!)))
   (rf/dispatch [::events/load-basemap])
+  (rf/dispatch [::events/load-buildings])
   (rf/dispatch [::events/load-all])
   (mount!))

@@ -19,6 +19,16 @@
 (rf/reg-event-db ::drag (fn [d [_ dx dy]] (update d :camera db/drag-camera dx dy)))
 (rf/reg-event-db ::zoom (fn [d [_ delta]] (update d :camera db/zoom-camera delta)))
 
+(rf/reg-event-db
+ ::fly-to
+ (fn [d [_ {:keys [lat lon]}]]
+   ;; Straight there, no animation. An eased flight is nicer and is also a
+   ;; second place for the camera to live; this moves the one camera the
+   ;; render loop already reads.
+   (update d :camera (fn [c] (db/clamp-camera
+                              (assoc c :lat-deg lat :lon-deg lon
+                                     :distance db/street-level-distance))))))
+
 ;; ---------------------------------------------------------------- fetch
 
 (rf/reg-fx
@@ -102,6 +112,21 @@
     ::fetch-json {:url "/api/basemap"
                   :on-ok [::basemap-loaded]
                   :on-fail [::basemap-failed]}}))
+
+(rf/reg-event-fx
+ ::load-buildings
+ (fn [_ _]
+   {::fetch-json {:url "/api/buildings"
+                  :on-ok [::buildings-loaded]
+                  :on-fail [::buildings-failed]}}))
+
+(rf/reg-event-db ::buildings-loaded
+                 (fn [d [_ m]] (assoc d :buildings {:status :loaded
+                                                    :areas (:areas m)})))
+(rf/reg-event-db ::buildings-failed
+                 (fn [d [_ e]] (assoc d :buildings {:status :unavailable
+                                                    :areas []
+                                                    :detail (get-in e [:body :detail])})))
 
 (rf/reg-event-db ::basemap-loaded
                  (fn [d [_ m]] (assoc d :basemap {:status :loaded :manifest m})))

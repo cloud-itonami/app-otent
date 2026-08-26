@@ -31,9 +31,11 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 
 const errors = [];
 const rasterTiles = [];
+const buildingTiles = [];
 page.on('pageerror', e => errors.push(String(e)));
 page.on('response', r => {
   if (r.url().includes('/api/basemap/blue-marble/')) rasterTiles.push(r.status());
+  if (r.url().includes('/api/basemap/buildings/')) buildingTiles.push(r.status());
 });
 page.on('console', m => {
   if (m.type() !== 'error') return;
@@ -149,6 +151,50 @@ check('no uncaught page errors', errors.length === 0, errors.slice(0, 3).join(' 
 
 await page.screenshot({ path: 'test/browser/globe.png' });
 await page.locator('#tenkyu-globe').screenshot({ path: 'test/browser/globe-canvas.png' });
+
+// ---------------------------------------------------------------------------
+// Buildings.
+//
+// Reached through the fly-to button, which is GENERATED from the buildings
+// manifest -- so this also checks that a city in the bucket has a way to be
+// seen. Zooming by hand instead would test the wheel, not the feature.
+const tilesBefore = await page.evaluate(() => window.__tenkyu.glTiles ?? null);
+const flyBtn = page.getByTitle('fly to New York (Manhattan)');
+check('the manifest produced a fly-to control', await flyBtn.count() > 0);
+if (await flyBtn.count() > 0) {
+  await flyBtn.click();
+  await page.waitForFunction(() => (window.__tenkyu?.buildings ?? 0) > 0, { timeout: 60000 })
+    .catch(() => {});
+  await page.waitForTimeout(5000);
+  const d = await page.evaluate(() => window.__tenkyu);
+  check('building footprints loaded from the lake', (d.buildings ?? 0) > 1000,
+        `buildings=${d.buildings}`);
+  check('ground polygons loaded with them', (d.surface ?? 0) > 0, `surface=${d.surface}`);
+  check('every building tile request succeeded', buildingTiles.every(s => s === 200),
+        `${buildingTiles.length} requests, statuses ${[...new Set(buildingTiles)].join(',')}`);
+  // Both backends report a tile count now. Accepting `null` here is how
+  // this check passed vacuously on WebGPU -- the preferred renderer -- for
+  // as long as only WebGL reported one.
+  const resident = d.glTiles ?? d.gpuTiles;
+  check('both backends report a resident tile count', resident != null,
+        `glTiles=${d.glTiles} gpuTiles=${d.gpuTiles}`);
+  check('descending did NOT leave the whole planet resident', resident < 40,
+        `tiles ${tilesBefore ?? '?'} -> ${resident}`);
+  await page.locator('#tenkyu-globe').screenshot({ path: 'test/browser/city-webgpu.png' });
+
+  // Flying back out must CLEAR the city, or it stays welded to the globe.
+  await page.evaluate(() => {
+    const c = document.getElementById('tenkyu-globe');
+    const r = c.getBoundingClientRect();
+    for (let i = 0; i < 40; i++)
+      c.dispatchEvent(new WheelEvent('wheel', { deltaY: 900, bubbles: true, cancelable: true,
+        clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
+  });
+  await page.waitForTimeout(4000);
+  check('leaving the area cleared the buildings',
+        (await page.evaluate(() => window.__tenkyu.buildings ?? 0)) === 0,
+        `buildings=${await page.evaluate(() => window.__tenkyu.buildings)}`);
+}
 
 // ---------------------------------------------------------------------------
 // The WebGL 2 fallback, forced.

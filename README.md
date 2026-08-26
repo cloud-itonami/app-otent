@@ -86,6 +86,53 @@ The id is read out of the **manifest-list filename**, not the JSON number:
 | quake (66 rows, 2 files) | 4.7 s | — |
 | aircraft (7,214 rows, 327 KB) | 21.1 s | — |
 
+## Buildings, at four cities
+
+Fly to Tokyo, Manhattan, London or Singapore and the globe grows a city:
+**19,016 building footprints** extruded at true scale, on ground coloured
+from OpenStreetMap water, landcover and parks.
+
+![Manhattan](test/browser/city-webgl2.png)
+
+The MVT is decoded **once, at ingest**, by `kotoba.map.mvt`. An
+OpenFreeMap z14 tile is 730 KB of protobuf carrying sixteen layers, of
+which this wants three; every viewer would otherwise pay to reach the same
+answer. What lands in R2 is flat coordinate arrays — measured, 730 KB of
+tile becomes about 34 KB of buildings.
+
+Coverage is **bounded and named**. OpenFreeMap serves buildings at z14
+only and the planet is 268 million z14 tiles, so four metro areas of about
+12 km across were ingested and the manifest records the exact tile blocks.
+The renderer asks only inside them, and the fly-to buttons are generated
+from that same manifest — a city ingested but missing from the row would
+be invisible, and a city listed but never ingested would fly you somewhere
+empty.
+
+Data © OpenStreetMap contributors, ODbL 1.0.
+
+### Two constants that quietly cancelled the feature
+
+The camera's floor was **1.05 earth radii — 318 km up** — while buildings
+are only requested below 1.01. The floor sat entirely above the threshold,
+so the layer could never load, ever, on any machine. Nothing looked wrong:
+the globe rendered, drag worked, zoom stopped somewhere plausible. Two
+constants in two namespaces, each defensible alone.
+
+`scene-test` now asserts them against each other, and both were watched
+failing.
+
+### The horizon was not in the culling
+
+Tile visibility compared each tile's centre against a threshold that
+assumed an infinitely distant camera, where the horizon is 90°. From
+2.5 km up the horizon is **1.6°**. The renderer held **624 tiles** — 624
+textures and 624 meshes on the GPU — when about one was visible. Adding
+`acos(1/d)` brought it to **7**.
+
+Fixing that re-broke the z0 case, because the tile radius was capped at
+π/2 and the z0 tile's corners really are a full π from its centre. Both
+directions are now pinned by tests.
+
 ## Satellites are elements, not positions
 
 The lake stores each satellite's two-line element set — one row per
@@ -153,7 +200,7 @@ src/app_tenkyu/
   route.cljc          views as data; the nav is generated from them   (shared)
   db.cljc             app state and every question the UI asks        (shared)
   views.cljc          jp-go-dds hiccup, and the SSR expander          (shared)
-  globe/scene.cljc    positions, camera, culling -- no GPU type       (shared)
+  globe/scene.cljc    positions, camera, culling, extrusion            (shared)
   propagate.cljc      TLE -> sub-satellite point, via sgp4            (shared)
   iceberg-id.cljc     how a snapshot is identified                    (shared)
 
@@ -162,14 +209,14 @@ src/app_tenkyu/
   api.cljs            the JSON endpoints and the snapshot-keyed cache
   core.cljs           the mount, the render loop, the pointer
   events.cljs subs.cljs
-  globe/webgpu.cljs   WebGPU backend
-  globe/webgl.cljs    WebGL 2 backend
+  globe/webgpu.cljs   WebGPU backend  (5 passes)
+  globe/webgl.cljs    WebGL 2 backend (5 passes)
   globe/renderer.cljs capability detection and dispatch
 ```
 
 Six of those are `.cljc` and shared between the Worker and the browser —
 the page the server renders and the page the browser mounts are the same
-function. `npm test` runs 41 tests / 2,977 assertions over them without a
+function. `npm test` runs 56 tests / 3,085 assertions over them without a
 browser or a GPU.
 
 ## Running it

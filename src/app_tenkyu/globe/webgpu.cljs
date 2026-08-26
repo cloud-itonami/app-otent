@@ -53,6 +53,51 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
   return vec4<f32>(c * l, 1.0);
 }")
 
+(def ^:private surface-wgsl "
+struct Uniforms { view_proj: mat4x4<f32>, unused: vec4<f32> };
+@group(0) @binding(0) var<uniform> u: Uniforms;
+
+struct VOut {
+  @builtin(position) pos: vec4<f32>,
+  @location(0) colour: vec3<f32>,
+};
+
+@vertex
+fn vs(@location(0) p: vec3<f32>, @location(1) c: vec3<f32>) -> VOut {
+  var o: VOut;
+  o.pos = u.view_proj * vec4<f32>(p, 1.0);
+  o.colour = c;
+  return o;
+}
+
+@fragment
+fn fs(i: VOut) -> @location(0) vec4<f32> { return vec4<f32>(i.colour, 1.0); }")
+
+(def ^:private building-wgsl "
+struct Uniforms { view_proj: mat4x4<f32>, sun: vec4<f32> };
+@group(0) @binding(0) var<uniform> u: Uniforms;
+
+struct VOut {
+  @builtin(position) pos: vec4<f32>,
+  @location(0) norm: vec3<f32>,
+};
+
+@vertex
+fn vs(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>) -> VOut {
+  var o: VOut;
+  o.pos = u.view_proj * vec4<f32>(p, 1.0);
+  o.norm = n;
+  return o;
+}
+
+@fragment
+fn fs(i: VOut) -> @location(0) vec4<f32> {
+  // Roofs read brighter than walls. That contrast is the only thing making
+  // a block of extrusions read as buildings rather than one grey mass.
+  let l = 0.30 + 0.70 * max(dot(normalize(i.norm), normalize(u.sun.xyz)), 0.0);
+  return vec4<f32>(vec3<f32>(0.82, 0.84, 0.92) * l, 1.0);
+}")
+
 (def ^:private line-wgsl "
 struct Uniforms { view_proj: mat4x4<f32>, colour: vec4<f32> };
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -134,6 +179,14 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
     (.unmap b)
     b))
 
+(defn- u32-buffer [^js device data]
+  (let [^js b (.createBuffer device #js {:size (max 16 (.-byteLength data))
+                                         :usage (bit-or js/GPUBufferUsage.INDEX js/GPUBufferUsage.COPY_DST)
+                                         :mappedAtCreation true})]
+    (.set (js/Uint32Array. (.getMappedRange b)) data)
+    (.unmap b)
+    b))
+
 (defn- index-buffer [^js device data]
   (let [^js b (.createBuffer ^js device #js {:size (max 16 (.-byteLength data))
                                          :usage (bit-or js/GPUBufferUsage.INDEX js/GPUBufferUsage.COPY_DST)
@@ -193,6 +246,18 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
                                                      {:shaderLocation 1 :offset 12 :format "float32x3"}
                                                      {:shaderLocation 2 :offset 24 :format "float32x2"}]}])
                              false "triangle-list")
+                         :surface-pipeline
+                         (mk surface-wgsl
+                             (clj->js [{:arrayStride 32
+                                        :attributes [{:shaderLocation 0 :offset 0 :format "float32x3"}
+                                                     {:shaderLocation 1 :offset 12 :format "float32x3"}]}])
+                             false "triangle-list")
+                         :building-pipeline
+                         (mk building-wgsl
+                             (clj->js [{:arrayStride 32
+                                        :attributes [{:shaderLocation 0 :offset 0 :format "float32x3"}
+                                                     {:shaderLocation 1 :offset 12 :format "float32x3"}]}])
+                             false "triangle-list")
                          :line-pipeline
                          (mk line-wgsl
                              (clj->js [{:arrayStride 12
@@ -223,14 +288,16 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
                          ;; dynamic offsets into one buffer would also work and
                          ;; are harder to read.
                          :uniforms
-                         (into {} (for [k [:tile :line :marker]]
+                         (into {} (for [k [:tile :line :marker :building :surface]]
                                     [k (.createBuffer ^js device
                                                       #js {:size 96
                                                            :usage (bit-or js/GPUBufferUsage.UNIFORM
                                                                           js/GPUBufferUsage.COPY_DST)})]))
                          :tiles (atom {})
                          :lines (atom nil)
-                         :markers (atom nil)}))))))))
+                         :markers (atom nil)
+                         :buildings (atom nil)
+                         :surface (atom nil)}))))))))
         (.catch (fn [_] nil)))))
 
 (defn- tile-key [{:keys [z x y]}] (str z "/" x "/" y))
@@ -279,6 +346,47 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
                                         :entries (clj->js [{:binding 0
                                                             :resource {:buffer (:line uniforms) :size 96}}])})}))
 
+(defn set-surface!
+  "Upload the ground polygons. `nil` clears them."
+  [{:keys [^js device surface ^js surface-pipeline uniforms]} mesh]
+  (when-let [old @surface]
+    (.destroy ^js (:vbuf old)) (.destroy ^js (:ibuf old)))
+  (if (or (nil? mesh) (empty? (:indices mesh)))
+    (reset! surface nil)
+    (reset! surface
+            {:vbuf (gpu-buffer device (f32 (:vertices mesh))
+                               (bit-or js/GPUBufferUsage.VERTEX js/GPUBufferUsage.COPY_DST))
+             :ibuf (u32-buffer device (js/Uint32Array. (clj->js (:indices mesh))))
+             :count (count (:indices mesh))
+             :bind (.createBindGroup ^js device
+                                     #js {:layout (.getBindGroupLayout ^js surface-pipeline 0)
+                                          :entries (clj->js [{:binding 0
+                                                              :resource {:buffer (:surface uniforms)
+                                                                         :size 96}}])})})))
+
+(defn set-buildings!
+  "Upload the extruded building mesh. `nil` clears it -- which is what
+  leaving a covered area must do, or the last city stays welded to the
+  globe and travels with it."
+  [{:keys [^js device buildings ^js building-pipeline uniforms]} mesh]
+  (when-let [old @buildings]
+    (.destroy ^js (:vbuf old))
+    (.destroy ^js (:ibuf old)))
+  (if (or (nil? mesh) (empty? (:indices mesh)))
+    (reset! buildings nil)
+    (reset! buildings
+            {:vbuf (gpu-buffer device (f32 (:vertices mesh))
+                               (bit-or js/GPUBufferUsage.VERTEX js/GPUBufferUsage.COPY_DST))
+             ;; uint32: a city block passes 65,535 vertices quickly, and
+             ;; uint16 would silently wrap rather than fail.
+             :ibuf (u32-buffer device (js/Uint32Array. (clj->js (:indices mesh))))
+             :count (count (:indices mesh))
+             :bind (.createBindGroup ^js device
+                                     #js {:layout (.getBindGroupLayout ^js building-pipeline 0)
+                                          :entries (clj->js [{:binding 0
+                                                              :resource {:buffer (:building uniforms)
+                                                                         :size 96}}])})})))
+
 (defn set-markers! [{:keys [^js device markers ^js marker-pipeline uniforms]} verts]
   (when-let [old @markers] (.destroy ^js (:vbuf old)))
   (reset! markers
@@ -305,7 +413,8 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
 
 (defn draw!
   [{:keys [^js device ^js ctx ^js canvas uniforms ^js tile-pipeline ^js line-pipeline
-           ^js marker-pipeline tiles lines markers] :as state}
+           ^js marker-pipeline ^js building-pipeline ^js surface-pipeline
+           tiles lines markers buildings surface] :as state}
    {:keys [view-proj dpr]}]
   (let [^js q (.-queue device)
         ^js depth-tex (ensure-depth! state)
@@ -318,6 +427,8 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
                  (.writeBuffer ^js q ^js (get uniforms which) 0
                                (f32 (concat view-proj tail (repeat 4 0.0)))))
         _ (do (write! :tile [0.6 0.5 0.6 0.0])
+              (write! :building [0.6 0.5 0.6 0.0])
+              (write! :surface [0.0 0.0 0.0 0.0])
               (write! :line [0.55 0.75 0.9 0.55])
               (write! :marker [(.-width canvas) (.-height canvas) (or dpr 1.0) 0.0]))
         ^js enc (.createCommandEncoder device)
@@ -339,6 +450,25 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
       (.setIndexBuffer pass ibuf "uint16")
       (.drawIndexed pass count))
 
+    ;; 1a. ground polygons, between the raster and the buildings.
+    (when-let [{:keys [^js vbuf ^js ibuf count ^js bind]}
+               (when (pos? (:count @surface 0)) @surface)]
+      (.setPipeline pass surface-pipeline)
+      (.setBindGroup pass 0 bind)
+      (.setVertexBuffer pass 0 vbuf)
+      (.setIndexBuffer pass ibuf "uint32")
+      (.drawIndexed pass count))
+
+    ;; 1b. buildings, before the lines so a coastline crossing a city is
+    ;; still visible over it.
+    (when-let [{:keys [^js vbuf ^js ibuf count ^js bind]}
+               (when (pos? (:count @buildings 0)) @buildings)]
+      (.setPipeline pass building-pipeline)
+      (.setBindGroup pass 0 bind)
+      (.setVertexBuffer pass 0 vbuf)
+      (.setIndexBuffer pass ibuf "uint32")
+      (.drawIndexed pass count))
+
     ;; 2. lines -- same uniform slot, different meaning
     (when-let [{:keys [^js vbuf count ^js bind]} (when (pos? (:count @lines 0)) @lines)]
       (.setPipeline pass line-pipeline)
@@ -357,4 +487,13 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
       (.draw pass 6 count))
 
     (.end pass)
-    (.submit ^js q #js [(.finish ^js enc)])))
+    (.submit ^js q #js [(.finish ^js enc)])
+    ;; Reported so the browser test's residency check is real on THIS
+    ;; backend too. It was WebGL-only, so the check passed vacuously on
+    ;; the preferred renderer -- "n/a (webgpu)" is what a check that
+    ;; cannot fail looks like.
+    (let [d (or (aget js/window "__tenkyu") #js {})]
+      (aset d "gpuTiles" (count @tiles))
+      (aset d "gpuBuildings" (:count @buildings 0))
+      (aset d "gpuSurface" (:count @surface 0))
+      (aset js/window "__tenkyu" d))))

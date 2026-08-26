@@ -177,6 +177,28 @@
                                #js {:headers #js {"content-type" "application/json"
                                                   "cache-control" "public, max-age=300"}}))))))
 
+(defn buildings-manifest
+  "`GET /api/buildings` -- which metro areas actually have footprints.
+
+  Read from the bucket, like the basemap manifest, and for the same
+  reason: the renderer asks for building tiles only inside these blocks,
+  so a constant here that disagreed with the bucket would either hide a
+  city or 404 over the rest of the planet."
+  [env]
+  (-> (.get (aget env "DATALAKE") "tenkyu/basemap/buildings/manifest.json")
+      (.then (fn [o]
+               (if (nil? o)
+                 ;; 200 with an empty area list, NOT a 503: no buildings
+                 ;; ingested is a real and legible state, and the app draws
+                 ;; a globe without them rather than reporting a fault.
+                 (js/Response. (js/JSON.stringify #js {:version 1 :areas #js []
+                                                       :detail "no buildings ingested"})
+                               #js {:headers #js {"content-type" "application/json"
+                                                  "cache-control" "public, max-age=300"}})
+                 (js/Response. (.-body o)
+                               #js {:headers #js {"content-type" "application/json"
+                                                  "cache-control" "public, max-age=300"}}))))))
+
 (defn basemap-object
   "`GET /api/basemap/*` -- a raster tile or a vector layer, straight from R2.
 

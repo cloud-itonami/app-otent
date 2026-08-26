@@ -37,7 +37,12 @@
 .tenkyu-shell { display:flex; flex-direction:column; min-height:100dvh; }
 .tenkyu-main { flex:1; display:flex; flex-direction:column; }
 .tenkyu-stage--hidden { display:none; }
-.tenkyu-stage { position:relative; flex:1; min-height:60dvh;
+/* The DADS container is sized for prose (about 40rem). A globe is not
+   prose, so the stage breaks out of it -- without this the canvas is 402 px
+   wide on a 1400 px screen and the overlay covers most of it. */
+.tenkyu-stage { position:relative; flex:1; min-height:70dvh;
+                width:min(96vw, 1600px);
+                margin-inline-start:calc(50% - min(48vw, 800px));
                 border-radius: var(--hig-radius-md);
                 overflow:hidden; background: var(--hig-color-tertiary-system-fill); }
 .tenkyu-canvas { position:absolute; inset:0; width:100%; height:100%; display:block;
@@ -48,6 +53,7 @@
                   display:flex; flex-direction:column; gap: var(--hig-spacing-2);
                   pointer-events:none; max-inline-size: 22rem; }
 .tenkyu-overlay > * { pointer-events:auto; }
+.tenkyu-overlay { max-inline-size: min(26rem, 42vw); }
 .tenkyu-plaque { background: var(--hig-color-secondary-system-background);
                  border: var(--hig-hairline) solid var(--hig-color-separator);
                  border-radius: var(--hig-radius-sm);
@@ -57,6 +63,8 @@
 .tenkyu-swatch { display:inline-flex; align-items:center; gap: var(--hig-spacing-1); }
 .tenkyu-dot { inline-size:.65rem; block-size:.65rem; border-radius:50%; }
 .tenkyu-nav { display:flex; gap: var(--hig-spacing-2); flex-wrap:wrap; }
+.tenkyu-cities { display:flex; flex-wrap:wrap; align-items:center;
+                 gap: var(--hig-spacing-1); }
 .tenkyu-foot { font-size: var(--hig-text-caption1-font-size);
                color: var(--hig-color-secondary-label); }
 ")
@@ -125,14 +133,44 @@
      [:div {:style {:color "var(--hig-color-secondary-label)"}}
       "not read: " (str/join ", " (map (comp name :kind) unavailable))])])
 
+(defn city-shortcuts
+  "Fly-to buttons, generated from the buildings manifest.
+
+  Generated, not listed: a city ingested but missing from this row would
+  be invisible, and a city listed but never ingested would fly the reader
+  somewhere with nothing in it. Both are the same bug the nav-from-data
+  rule exists to prevent.
+
+  `on-fly` is passed in so this stays a pure function of its arguments and
+  can be rendered in a test."
+  [areas on-fly]
+  (when (seq areas)
+    [:div {:class "tenkyu-plaque tenkyu-cities"}
+     [:span {:class "tenkyu-foot"} "buildings: "]
+     (for [{:keys [id label lat lon buildings]} areas]
+       ^{:key id}
+       [dds/button (str label " (" (or buildings 0) ")")
+        {:type :text :size "sm"
+         :attrs {:on-click #(on-fly {:lat lat :lon lon})
+                 :title (str "fly to " label)}}])]))
+
 (defn globe-overlay
   "The plaques that sit on top of the globe.
 
   The canvas itself is NOT here -- see `app`. This is only what is drawn
   over it, and it is mounted only on the globe view."
-  [{:keys [backend] :as m}]
+  [{:keys [backend building-areas on-fly camera] :as m}]
   [:div {:class "tenkyu-overlay"}
    [status-plaque m]
+   (when on-fly [city-shortcuts building-areas on-fly])
+   (when camera
+     [:div {:class "tenkyu-plaque tenkyu-foot"}
+      ;; Rounded with arithmetic rather than `.toFixed`: this namespace is
+      ;; `.cljc` and renders on the Worker too, where a JS method on a
+      ;; number is a runtime error rather than a compile one.
+      (let [r3 (fn [x] (/ (Math/round (* 1000.0 x)) 1000.0))]
+        (str (r3 (:lat-deg camera)) ", " (r3 (:lon-deg camera))
+             " · " (Math/round (* 6371.0 (- (:distance camera) 1.0))) " km up"))])
    [:div {:class "tenkyu-plaque tenkyu-legend"}
     (for [[k rgb] [[:satellite [1.0 0.85 0.25]] [:quake [1.0 0.35 0.30]]
                    [:aircraft [0.40 0.85 1.0]] [:fire [1.0 0.55 0.15]]
@@ -187,11 +225,23 @@
    [dds/table
     {:caption "Basemap layers"
      :headers ["layer" "source" "licence"]
-     :rows [["raster" "NASA GIBS BlueMarble_ShadedRelief_Bathymetry" "NASA -- public domain"]
-            ["vector" "Natural Earth 110m coastline and land borders" "public domain (CC0)"]]}]
+     :rows [["raster" "NASA GIBS BlueMarble_ShadedRelief_Bathymetry (z0-5)"
+             "NASA -- public domain"]
+            ["vector" "Natural Earth 110m coastline and land borders"
+             "public domain (CC0)"]
+            ["buildings" "OpenStreetMap via OpenFreeMap (z14, four metro areas)"
+             "ODbL 1.0 — © OpenStreetMap contributors"]
+            ["ground" "OpenStreetMap water / landcover / park, from the same tiles"
+             "ODbL 1.0 — © OpenStreetMap contributors"]]}]
    [:p {:class "tenkyu-foot"}
-    "Both basemap layers are ingested once into our own bucket and served from it. "
-    "Nothing on this page is fetched from a third party at render time."]])
+    "Every basemap layer is ingested once into our own bucket and served from it. "
+    "Nothing on this page is fetched from a third party at render time."]
+   [:p {:class "tenkyu-foot"}
+    "Building footprints exist for Tokyo, New York (Manhattan), London and "
+    "Singapore only — about 12 km across each, at zoom 14. Everywhere else the "
+    "globe has imagery and coastlines but no buildings, because nothing was "
+    "ingested there. The buttons on the globe are generated from what is "
+    "actually in the bucket."]])
 
 (defn about-view [_]
   [dds/stack

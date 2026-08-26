@@ -38,9 +38,11 @@
   (case (:backend state)
     :webgpu {:ensure-tile! gpu/ensure-tile! :drop-tiles! gpu/drop-tiles!
              :set-lines! gpu/set-lines! :set-markers! gpu/set-markers!
+             :set-buildings! gpu/set-buildings! :set-surface! gpu/set-surface!
              :draw! gpu/draw!}
     :webgl2 {:ensure-tile! gl/ensure-tile! :drop-tiles! gl/drop-tiles!
              :set-lines! gl/set-lines! :set-markers! gl/set-markers!
+             :set-buildings! gl/set-buildings! :set-surface! gl/set-surface!
              :draw! gl/draw!}
     nil))
 
@@ -55,6 +57,12 @@
 
 (defn set-markers! [state verts]
   (when-let [d (dispatch state)] ((:set-markers! d) state verts)))
+
+(defn set-buildings! [state mesh]
+  (when-let [d (dispatch state)] ((:set-buildings! d) state mesh)))
+
+(defn set-surface! [state mesh]
+  (when-let [d (dispatch state)] ((:set-surface! d) state mesh)))
 
 (defn draw! [state frame]
   (when-let [d (dispatch state)] ((:draw! d) state frame)))

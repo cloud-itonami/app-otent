@@ -131,5 +131,57 @@
 (deftest the-sources-view-names-a-licence-for-every-feed
   (let [t (text-of (views/app (assoc model :view :sources)))]
     (doseq [s ["CelesTrak" "USGS" "OpenSky" "FIRMS" "AISStream"
-               "Natural Earth" "GIBS"]]
-      (is (str/includes? t s) (str s " is not credited")))))
+               "Natural Earth" "GIBS"
+               ;; ODbL REQUIRES this attribution. A licence line that can
+               ;; be dropped by an unrelated edit is not attribution.
+               "OpenStreetMap" "ODbL"]]
+      (is (str/includes? t s) (str s " is not credited")))
+    (testing "and the building coverage is stated -- four cities is an
+              honest picture only if the page says it is four cities"
+      (doseq [c ["Tokyo" "Manhattan" "London" "Singapore"]]
+        (is (str/includes? t c) (str c " is not listed as covered"))))))
+
+(def ^:private areas
+  [{:id "tokyo" :label "Tokyo" :lat 35.6812 :lon 139.7671 :buildings 2199
+    :z 14 :x0 14550 :x1 14554 :y0 6449 :y1 6453}
+   {:id "manhattan" :label "New York (Manhattan)" :lat 40.758 :lon -73.9855
+    :buildings 10129 :z 14 :x0 4822 :x1 4826 :y0 6155 :y1 6159}])
+
+(deftest city-shortcuts-are-generated-from-the-manifest
+  ;; A city ingested but missing from this row would be invisible; a city
+  ;; listed but never ingested would fly the reader somewhere with nothing
+  ;; in it. Both are the bug the nav-from-data rule exists to prevent, and
+  ;; the manifest is the only thing that knows which cities were ingested.
+  (let [flown (atom nil)
+        t (text-of (views/city-shortcuts areas #(reset! flown %)))]
+    (doseq [a areas]
+      (is (str/includes? t (:label a)) (str (:label a) " is missing")))
+    (testing "and the count is shown, so an empty city is visible as empty"
+      (is (str/includes? t "2199"))
+      (is (str/includes? t "10129")))))
+
+(deftest no-shortcuts-when-nothing-was-ingested
+  ;; An empty row of buttons is worse than no row: it says the feature
+  ;; exists and does nothing.
+  (is (nil? (views/city-shortcuts [] identity)))
+  (is (nil? (views/city-shortcuts nil identity))))
+
+(deftest the-fly-to-handler-carries-the-place
+  (let [flown (atom nil)
+        rendered (render (views/city-shortcuts areas #(reset! flown %)))
+        ;; find the first :on-click in the rendered attribute maps
+        clicks (->> (tree-seq coll? seq rendered)
+                    (filter map?)
+                    (keep :on-click))]
+    (is (seq clicks) "no click handler reached the button")
+    ((first clicks))
+    (is (= {:lat 35.6812 :lon 139.7671} @flown))))
+
+(deftest the-globe-overlay-shows-where-the-camera-is
+  ;; Without it, "why are there no buildings" has no answer on screen --
+  ;; the reader cannot tell they are over the Pacific.
+  (let [t (text-of (views/globe-overlay
+                    (assoc model :building-areas areas :on-fly identity
+                           :camera {:lat-deg 35.681 :lon-deg 139.767 :distance 1.0004})))]
+    (is (str/includes? t "35.681"))
+    (is (str/includes? t "km up"))))

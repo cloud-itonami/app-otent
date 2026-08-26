@@ -95,6 +95,9 @@
       (= "/api/basemap" path)
       (api/basemap-manifest env)
 
+      (= "/api/buildings" path)
+      (api/buildings-manifest env)
+
       (str/starts-with? path "/api/basemap/")
       (api/basemap-object env (subs path (count "/api/basemap/")))
 

@@ -61,6 +61,52 @@ void main() {
   outColor = vec4(c * l, 1.0);
 }")
 
+(def ^:private surface-vs "#version 300 es
+precision highp float;
+layout(location=0) in vec3 a_pos;
+layout(location=1) in vec3 a_colour;
+uniform mat4 u_view_proj;
+out vec3 v_colour;
+void main() {
+  v_colour = a_colour;
+  vec4 p = u_view_proj * vec4(a_pos, 1.0);
+  p.z = 2.0 * p.z - p.w;
+  gl_Position = p;
+}")
+
+(def ^:private surface-fs "#version 300 es
+precision highp float;
+in vec3 v_colour;
+out vec4 outColor;
+void main() { outColor = vec4(v_colour, 1.0); }")
+
+(def ^:private building-vs "#version 300 es
+precision highp float;
+layout(location=0) in vec3 a_pos;
+layout(location=1) in vec3 a_norm;
+uniform mat4 u_view_proj;
+out vec3 v_norm;
+void main() {
+  v_norm = a_norm;
+  vec4 p = u_view_proj * vec4(a_pos, 1.0);
+  p.z = 2.0 * p.z - p.w;
+  gl_Position = p;
+}")
+
+(def ^:private building-fs "#version 300 es
+precision highp float;
+in vec3 v_norm;
+uniform vec3 u_sun;
+out vec4 outColor;
+void main() {
+  // Roofs (normal along the surface) read brighter than walls (normal
+  // horizontal). That contrast is the only thing that makes a block of
+  // extrusions read as buildings rather than as one grey mass, and it is
+  // why the walls carry an outward normal rather than the surface one.
+  float l = 0.30 + 0.70 * max(dot(normalize(v_norm), normalize(u_sun)), 0.0);
+  outColor = vec4(vec3(0.82, 0.84, 0.92) * l, 1.0);
+}")
+
 (def ^:private line-vs "#version 300 es
 precision highp float;
 layout(location=0) in vec3 a_pos;
@@ -146,10 +192,14 @@ void main() {
      :canvas canvas
      :tile-prog (program gl tile-vs tile-fs)
      :line-prog (program gl line-vs line-fs)
+     :building-prog (program gl building-vs building-fs)
+     :surface-prog (program gl surface-vs surface-fs)
      :marker-prog (program gl marker-vs marker-fs)
      :tiles (atom {})        ; {tile-key {:vao :count :tex}}
      :lines (atom nil)
-     :markers (atom nil)}))
+     :markers (atom nil)
+     :buildings (atom nil)
+     :surface (atom nil)}))
 
 (defn- tile-key [{:keys [z x y]}] (str z "/" x "/" y))
 
@@ -205,6 +255,45 @@ void main() {
     (.bindVertexArray gl nil)
     (reset! lines {:vao vao :count (/ (count verts) 3)})))
 
+(defn set-surface!
+  "Upload the ground polygons. `nil` clears them."
+  [{:keys [gl surface]} mesh]
+  (when-let [old @surface] (.deleteVertexArray gl (:vao old)))
+  (if (or (nil? mesh) (empty? (:indices mesh)))
+    (reset! surface nil)
+    (let [vao (.createVertexArray gl)]
+      (.bindVertexArray gl vao)
+      (buffer gl (.-ARRAY_BUFFER gl) (js/Float32Array. (clj->js (:vertices mesh))))
+      (doseq [[loc size off] [[0 3 0] [1 3 12]]]
+        (.enableVertexAttribArray gl loc)
+        (.vertexAttribPointer gl loc size (.-FLOAT gl) false 32 off))
+      (buffer gl (.-ELEMENT_ARRAY_BUFFER gl) (js/Uint32Array. (clj->js (:indices mesh))))
+      (.bindVertexArray gl nil)
+      (reset! surface {:vao vao :count (count (:indices mesh))}))))
+
+(defn set-buildings!
+  "Upload the extruded building mesh. `nil` clears it -- which is what
+  leaving a covered area must do, or the last city stays welded to the
+  globe and travels with it."
+  [{:keys [gl buildings]} mesh]
+  (when-let [old @buildings]
+    (.deleteVertexArray gl (:vao old)))
+  (if (or (nil? mesh) (empty? (:indices mesh)))
+    (reset! buildings nil)
+    (let [vao (.createVertexArray gl)]
+      (.bindVertexArray gl vao)
+      (buffer gl (.-ARRAY_BUFFER gl) (js/Float32Array. (clj->js (:vertices mesh))))
+      ;; pos3 + norm3 + uv2 = 8 floats; the uv is unused here but the
+      ;; stride is the mesh library's, not this file's to choose.
+      (doseq [[loc size off] [[0 3 0] [1 3 12]]]
+        (.enableVertexAttribArray gl loc)
+        (.vertexAttribPointer gl loc size (.-FLOAT gl) false 32 off))
+      ;; Uint32: a city block passes 65,535 vertices quickly, and
+      ;; Uint16 would silently wrap rather than fail.
+      (buffer gl (.-ELEMENT_ARRAY_BUFFER gl) (js/Uint32Array. (clj->js (:indices mesh))))
+      (.bindVertexArray gl nil)
+      (reset! buildings {:vao vao :count (count (:indices mesh))}))))
+
 (defn set-markers! [{:keys [gl markers]} verts]
   (when-let [old @markers] (.deleteVertexArray gl (:vao old)))
   (let [vao (.createVertexArray gl)]
@@ -218,7 +307,8 @@ void main() {
     (reset! markers {:vao vao :count (/ (count verts) 7)})))
 
 (defn draw!
-  [{:keys [gl canvas tile-prog line-prog marker-prog tiles lines markers]}
+  [{:keys [gl canvas tile-prog line-prog marker-prog building-prog surface-prog
+           tiles lines markers buildings surface]}
    {:keys [view-proj dpr]}]
   (let [w (.-width canvas) h (.-height canvas)]
     (.viewport gl 0 0 w h)
@@ -241,6 +331,28 @@ void main() {
       (.bindTexture gl (.-TEXTURE_2D gl) tex)
       (.bindVertexArray gl vao)
       (.drawElements gl (.-TRIANGLES gl) count (.-UNSIGNED_SHORT gl) 0))
+
+    ;; 1a. ground polygons -- water, landcover, parks. Drawn after the
+    ;; raster tiles and before the buildings, with culling off because an
+    ;; earcut ring's winding is whatever the source gave it.
+    (when-let [{:keys [vao count]} (when (pos? (:count @surface 0)) @surface)]
+      (.disable gl (.-CULL_FACE gl))
+      (.useProgram gl surface-prog)
+      (.uniformMatrix4fv gl (.getUniformLocation gl surface-prog "u_view_proj")
+                         false (js/Float32Array. (clj->js view-proj)))
+      (.bindVertexArray gl vao)
+      (.drawElements gl (.-TRIANGLES gl) count (.-UNSIGNED_INT gl) 0)
+      (.enable gl (.-CULL_FACE gl)))
+
+    ;; 1b. buildings -- same depth state as the tiles, drawn before the
+    ;; lines so a coastline crossing a city is still visible over it.
+    (when-let [{:keys [vao count]} (when (pos? (:count @buildings 0)) @buildings)]
+      (.useProgram gl building-prog)
+      (.uniformMatrix4fv gl (.getUniformLocation gl building-prog "u_view_proj")
+                         false (js/Float32Array. (clj->js view-proj)))
+      (.uniform3f gl (.getUniformLocation gl building-prog "u_sun") 0.6 0.5 0.6)
+      (.bindVertexArray gl vao)
+      (.drawElements gl (.-TRIANGLES gl) count (.-UNSIGNED_INT gl) 0))
 
     ;; 2. lines
     (.disable gl (.-CULL_FACE gl))
@@ -274,4 +386,6 @@ void main() {
       (aset d "glTiles" (count @tiles))
       (aset d "glLines" (:count @lines 0))
       (aset d "glMarkers" (:count @markers 0))
+      (aset d "glBuildings" (:count @buildings 0))
+      (aset d "glSurface" (:count @surface 0))
       (aset js/window "__tenkyu" d))))
