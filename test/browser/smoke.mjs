@@ -183,17 +183,22 @@ if (await flyBtn.count() > 0) {
   await page.locator('#tenkyu-globe').screenshot({ path: 'test/browser/city-webgpu.png' });
 
   // Flying back out must CLEAR the city, or it stays welded to the globe.
-  await page.evaluate(() => {
-    const c = document.getElementById('tenkyu-globe');
-    const r = c.getBoundingClientRect();
-    for (let i = 0; i < 40; i++)
-      c.dispatchEvent(new WheelEvent('wheel', { deltaY: 900, bubbles: true, cancelable: true,
-        clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
-  });
-  await page.waitForTimeout(4000);
-  check('leaving the area cleared the buildings',
-        (await page.evaluate(() => window.__tenkyu.buildings ?? 0)) === 0,
-        `buildings=${await page.evaluate(() => window.__tenkyu.buildings)}`);
+  //
+  // Driven with `page.mouse.wheel`, a real input event. Dispatching a
+  // synthetic `WheelEvent` from inside the page did NOT reach the handler,
+  // so this check reported the city as never cleared while a hand-driven
+  // probe of the same build showed buildings going 7821 -> 0 and resident
+  // tiles 7 -> 1. The application was right and the test was driving it in
+  // a way no user does.
+  const box = await page.locator('#tenkyu-globe').boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let i = 0; i < 25; i++) { await page.mouse.wheel(0, 800); await page.waitForTimeout(30); }
+  await page.waitForTimeout(5000);
+  const out = await page.evaluate(() => window.__tenkyu);
+  check('leaving the area cleared the buildings', (out.buildings ?? -1) === 0,
+        `buildings=${out.buildings}`);
+  check('and released their GPU buffers', (out.gpuBuildings ?? out.glBuildings ?? -1) === 0,
+        `gpuBuildings=${out.gpuBuildings} glBuildings=${out.glBuildings}`);
 }
 
 // ---------------------------------------------------------------------------
