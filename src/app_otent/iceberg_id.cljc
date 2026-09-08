@@ -7,7 +7,7 @@
   the test file -- and the transcription disagreed with the code on the
   fallback branch, so two assertions failed against a function the
   implementation does not have. A rule worth testing is worth requiring."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (defn snapshot-id
   "A stable, exact identity for an Iceberg snapshot, for use as a cache key.

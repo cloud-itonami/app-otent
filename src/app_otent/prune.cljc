@@ -6,7 +6,7 @@
   from a Worker.
 
   `iceberg.cljs` does the fetching and hands the file list here."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (defn bytes->str
   "An Avro `bytes` value -> the string it encodes.

@@ -32,7 +32,7 @@
   same fact as a row dropped for being older than the window, and neither
   is the same as an object we simply do not have. The stats travel in the
   response so a reader can tell `no aircraft` from `no aircraft recently`."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def default-window-ms
   "How far back an object may have been observed and still be drawn.
@@ -75,7 +75,7 @@
 (def fallback-window-ms 3600000)
 
 (defn window-ms [kind]
-  (get default-window-ms (some-> kind name str/lower-case) fallback-window-ms))
+  (get default-window-ms (some-> kind name str/lower) fallback-window-ms))
 
 (defn fold
   "`objects` -> the newest observation per object, within the window.

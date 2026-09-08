@@ -1,7 +1,7 @@
 (ns app-otent.views-test
   "The views, rendered as data. No browser, no GPU, no DOM."
   (:require [clojure.test :refer [deftest is testing]]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [jp-go-dds.tokens :as tokens]
             [app-otent.views :as views]
             [app-otent.route :as route]
