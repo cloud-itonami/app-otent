@@ -15,7 +15,7 @@
 
   The one place app CSS exists is the globe canvas, which DADS has no
   component for -- a full-bleed GPU surface is not markup."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [jp-go-dds.core :as dds]
             [app-otent.route :as route]
             [app-otent.db :as db]))

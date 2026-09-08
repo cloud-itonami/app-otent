@@ -20,7 +20,7 @@
   rather than draw an empty sky. Collapsing it into `:loaded` with zero
   rows would make 'no vessels are broadcasting' and 'nobody is listening'
   the same picture."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def kinds [:satellite :quake :aircraft :fire :vessel])
 

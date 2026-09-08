@@ -23,7 +23,7 @@
   this one; the extraction trigger is the third. This is the third, and
   routing is neither markup nor CSS, so it does not belong in
   `jp-go-dds` -- see the note in the README."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def views
   "The single source. `:id` is the fragment, `:label` the nav text."
