@@ -13,7 +13,7 @@
   canvas and the GPU device are created once and survive every crossing,
   which is the point -- re-creating a WebGPU device per screen would make
   the globe blink on every click."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [reagent.dom.client :as rdc]
             [re-frame.core :as rf]
             [re-frame.db :as rf-db]

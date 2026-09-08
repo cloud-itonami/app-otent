@@ -20,7 +20,7 @@
   Every basemap byte and every Iceberg byte is read through this Worker's
   R2 binding. There is no public bucket URL, no signed link handed to the
   browser, and the catalog token never leaves the Worker."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [jp-go-dds.page :as page]
             [jp-go-dds.tokens :as tokens]
             [app-otent.api :as api]

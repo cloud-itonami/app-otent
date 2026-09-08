@@ -24,7 +24,7 @@
   live ones, so the age has to be in the data, not in the operator's head."
   (:require [app-otent.iceberg :as ice]
             [app-otent.objects :as obj]
-            [clojure.string :as str]))
+            [kotoba.lang.text :as str]))
 
 (def kinds
   {"satellite" {:table "otent_satellite"
