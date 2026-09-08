@@ -34,7 +34,7 @@
             [avro.file :as avro]
             [parquet.source :as pq]
             [columnar.plan :as plan]
-            [clojure.string :as str]))
+            [kotoba.lang.text :as str]))
 
 (defn- json [r] (.json r))
 
