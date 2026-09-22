@@ -8,7 +8,9 @@ watching*. That is what this page is.
 
 Live at **https://app-otent.04-feasts-minded.workers.dev**
 
-Satellites, earthquakes, aircraft, fires and vessels on a WebGPU globe.
+Satellites, earthquakes, aircraft, fires and vessels on a WebGPU globe —
+and the weather in 3D: sea-level pressure as a surface, wind as moving
+particles, rain as columns, played forward through the GFS forecast.
 Every mark, and the Earth underneath it, comes out of Cloudflare R2 Data
 Catalog — ingested by [`cloud-itonami/otent`](https://github.com/cloud-itonami/otent),
 governed, and read back through this Worker. **The browser never talks to
@@ -149,6 +151,62 @@ count is on screen. A geostationary satellite pushed through the near-Earth
 model comes back with a position that drifts hundreds of kilometres inside
 a day, and nothing about the number says so.
 
+## Weather, in three dimensions — `#weather`
+
+![the 974 hPa low from the side](test/browser/weather-oblique.png)
+
+Sea-level pressure is drawn as a **surface you can fly around**, not a
+coloured map: it floats 450 km above the ground at 1013.25 hPa and moves
+7 km per hPa (times a ×0.5–×3 exaggeration) up or down with the pressure.
+A typhoon is a funnel, a blocking high a dome. Tilt the camera (真上 /
+斜め / 低空) and the relief is seen from the side, which is the whole
+point: from directly above every height collapses onto the page.
+
+| layer | what it is |
+|---|---|
+| surface | height = pressure; colour = pressure, temperature or humidity |
+| 等圧線 | marching squares every 4 hPa, heavier every 20 (JMA's chart interval), lifted onto the surface |
+| 低 / 高 | local minima below 1008 hPa and maxima above 1020 hPa, labelled over their centres, hidden behind the limb |
+| 風 | 4,000 tracers integrated **in the browser** through the 10 m wind |
+| 降水 | a column per 2° cell raining ≥ 0.5 mm/h, 25 km per mm/h |
+
+Hover anywhere for pressure, temperature, humidity, wind (from which
+compass point, the meteorological convention) and rain rate at that place.
+
+### What is simulated, and by whom
+
+Two different things move, and they are not the same claim:
+
+- **The fields** are NOAA GFS — a numerical weather prediction model —
+  from 24 hours ago to about 7 days ahead, every 6 hours, ingested by
+  `cloud-itonami/otent` (`bin/weather.cljk`). Between two frames the field
+  is interpolated linearly in time and the page says so. The clock plays
+  at 1–12 simulated hours per second, and **holds** rather than
+  interpolating through a frame that has not arrived.
+- **The particles** are ours: explicit Euler on the sphere,
+  `dlat = v dt / R`, `dlon = u dt / (R cos lat)`, bilinear in space. Their
+  clock runs faster than the forecast's (16 simulated hours per second per
+  earth radius of camera altitude, stated on the page) so they cross the
+  screen at a readable pace; they trace the true streamlines of the
+  instant being shown.
+
+### How it gets here
+
+A pressure field is 16,380 numbers that mean nothing apart, so it is not
+Iceberg rows: each frame is one packed object, `OTWX` + Int16 per field
+(pressure to 1 Pa, wind to 1 cm/s, temperature to 0.01 K, rain to 0.01
+mm/h), 196 KB, served through the Worker's R2 binding at
+`/api/weather/gfs/<run>/<t>.bin` with an immutable cache. The manifest at
+`/api/weather` lists the frames that were written and the ones that were
+refused, with reasons; no manifest is a 503 and the view says UNMEASURED.
+
+Both backends draw it — WebGPU and the WebGL 2 fallback — with the same
+vertex data from `app-otent.weather`, which is pure and tested without a
+GPU (decode, time bracketing, sampling with longitude wrap, the surface's
+winding, isobars lying on their level, a particle moving at the speed of
+the wind). `npm run test:browser` checks both backends upload the
+91 × 181-vertex surface, the lines, a playing clock and a labelled centre.
+
 ## WebGPU, with a WebGL 2 fallback that is actually checked
 
 Both backends consume the same vertex data from `globe/scene.cljc`, which
@@ -227,7 +285,7 @@ browser or a GPU.
 ```bash
 npm install
 npm test                       # 41 tests, no browser needed
-npm run build                  # both bundles
+npm run build                  # both bundles (scripts/build.cljk -- see its header)
 npx wrangler secret put CF_CATALOG_TOKEN     # R2 Data Catalog: Read
 npx wrangler deploy
 npm run test:browser           # 23 checks against the deployed Worker

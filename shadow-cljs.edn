@@ -8,6 +8,12 @@
 ;; browser mounts are the same function, not two implementations that agree
 ;; until someone edits one of them.
 ;;
+;; `jp-go-dds.core` is exempted by NAME, and only it: it defines `list`
+;; without excluding `cljs.core/list` (a :redef warning in a library this
+;; repo does not own). Turning the whole flag off to get past it would
+;; silence this repo's own undeclared vars too. Remove the exemption when
+;; the library adds `(:refer-clojure :exclude [list])`.
+;;
 ;; `:warnings-as-errors` goes inside `:compiler-options`. NOT `:build-options`:
 ;; shadow silently ignores the key there, which turns the check itself into a
 ;; check that cannot fail -- an undeclared var stays a warning, release exits
@@ -30,7 +36,13 @@
   "../../kotoba-lang/columnar/src"
   "../../kotoba-lang/json/src"
   "../../kotoba-lang/org-ietf-deflate/src"
-  "../../kotoba-lang/org-ietf-zstd/src"]
+  "../../kotoba-lang/org-ietf-zstd/src"
+  ;; Required and never listed: every namespace here reads text through
+  ;; kotoba.lang.text, and the Parquet reader requires snappy.core. Both
+  ;; resolved only by accident of a sibling's classpath until 2026-09-23,
+  ;; when a clean build failed on each in turn.
+  "../../kotoba-lang/text/src"
+  "../../kotoba-lang/com-google-snappy/src"]
 
  :dependencies
  [[reagent "1.2.0"]
@@ -42,7 +54,7 @@
            :modules {:worker {:exports {default app-otent.worker/handler}}}
            :compiler-options {:output-feature-set :es2020
                               :infer-externs :auto
-                              :warnings-as-errors true}}
+                              :warnings-as-errors {:ignore #{jp-go-dds.core}}}}
 
   :app {:target :esm
         :output-dir "public"
@@ -51,4 +63,4 @@
         :modules {:app {:init-fn app-otent.core/init}}
         :compiler-options {:output-feature-set :es2020
                            :infer-externs :auto
-                           :warnings-as-errors true}}}}
+                           :warnings-as-errors {:ignore #{jp-go-dds.core}}}}}}

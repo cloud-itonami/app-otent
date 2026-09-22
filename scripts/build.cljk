@@ -1,0 +1,99 @@
+;; kbb-cutover: keep  (this file runs the bundler the cutover's rewrite could not replace)
+(ns build
+  "Build both bundles: `public/app.js` (the browser) and `dist/worker.js`
+  (the Worker).
+
+    kbb --backend sci scripts/build.cljk            # both
+    kbb --backend sci scripts/build.cljk app        # one
+
+  ## Why this file exists
+
+  The 2026-09-11 kbb cutover rewrote this repository's build scripts to
+  `amu compile --target wasm32-browser app`. Measured 2026-09-23: amu
+  refuses that invocation (`source input must use .kotoba, .cljk, ...` --
+  it compiles source files, not shadow build ids), so `npm run build` had
+  not produced a bundle since the cutover and the deployed Worker was the
+  2026-08-26 one.
+
+  The bundler that does build this app is the shadow-cljs already in
+  `devDependencies`. It does not know the `.cljk` extension, so the
+  sources and the sibling libraries named in `shadow-cljs.edn` are staged
+  as `.cljc` under `.build/stage/` -- a copy, never a rename in place --
+  and the build runs there. When amu compiles a reagent/re-frame app, this
+  file is deleted and `package.json` points at amu again.
+
+  exit 0 built · 1 the bundler failed · 2 could not stage"
+  (:require ["child_process" :as cp]
+            ["fs" :as fs]
+            ["path" :as path]
+            [clojure.edn :as edn]
+            [kotoba.lang.text :as str]))
+
+(def root (js/process.cwd))
+(def stage (path/join root ".build" "stage"))
+
+(defn- log [& xs] (binding [*print-fn* *print-err-fn*] (apply println xs)))
+
+(def source-exts #{".cljk" ".cljc" ".cljs" ".edn" ".css" ".js" ".json"})
+
+(defn- copy-tree!
+  "Copy `from` to `to`, renaming `.cljk` to `.cljc`. Returns files copied."
+  [from to]
+  (if-not (fs/existsSync from)
+    (do (log "MISSING source path:" from) -1)
+    (reduce
+     (fn [n e]
+       (let [src (path/join from (.-name e))
+             dst (path/join to (.-name e))]
+         (cond
+           (.isDirectory e) (let [m (copy-tree! src dst)] (if (neg? m) m (+ n m)))
+           (contains? source-exts (path/extname (.-name e)))
+           (do (fs/mkdirSync to #js {:recursive true})
+               (fs/copyFileSync src (if (str/ends-with? dst ".cljk")
+                                      (str (subs dst 0 (- (count dst) 5)) ".cljc")
+                                      dst))
+               (inc n))
+           :else n)))
+     0
+     (fs/readdirSync from #js {:withFileTypes true}))))
+
+(defn- staged-path
+  "`../../kotoba-lang/geo/src` -> `lib/kotoba-lang/geo/src`; `src` stays."
+  [p]
+  (if (str/starts-with? p "../../")
+    (str "lib/" (subs p 6))
+    p))
+
+(defn -main [builds]
+  (let [cfg-text (str (fs/readFileSync (path/join root "shadow-cljs.edn") "utf8"))
+        cfg (edn/read-string cfg-text)
+        paths (:source-paths cfg)]
+    (when (fs/existsSync stage) (fs/rmSync stage #js {:recursive true :force true}))
+    (fs/mkdirSync stage #js {:recursive true})
+    (let [counts (for [p paths] [p (copy-tree! (path/resolve root p) (path/join stage (staged-path p)))])
+          missing (filter (comp neg? second) counts)]
+      (if (seq missing)
+        (do (log "could not stage:" (str/join ", " (map first missing)))
+            (set! (.-exitCode js/process) 2))
+        (do
+          (log "staged" (reduce + (map second counts)) "files from" (count paths) "source paths")
+          ;; The same config text, with only the sibling paths rewritten --
+          ;; not a second hand-kept copy of the build that could drift.
+          (fs/writeFileSync (path/join stage "shadow-cljs.edn")
+                            (str/replace cfg-text "\"../../" "\"lib/"))
+          (fs/copyFileSync (path/join root "package.json") (path/join stage "package.json"))
+          (when-not (fs/existsSync (path/join stage "node_modules"))
+            (fs/symlinkSync (path/join root "node_modules") (path/join stage "node_modules")))
+          (let [bin (path/join root "node_modules" ".bin" "shadow-cljs")
+                r (cp/spawnSync bin (clj->js (into ["release"] builds))
+                                #js {:cwd stage :stdio "inherit"})]
+            (if-not (zero? (.-status r))
+              (do (log "bundler failed, exit" (.-status r))
+                  (set! (.-exitCode js/process) 1))
+              (doseq [[b out] [["app" "public/app.js"] ["worker" "dist/worker.js"]]
+                      :when (some #{b} builds)]
+                (fs/mkdirSync (path/dirname (path/join root out)) #js {:recursive true})
+                (fs/copyFileSync (path/join stage out) (path/join root out))
+                (log "wrote" out (.-size (fs/statSync (path/join root out))) "bytes")))))))))
+
+(-main (or (seq *command-line-args*) ["app" "worker"]))

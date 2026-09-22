@@ -265,6 +265,33 @@ check('the fallback sized its canvas the same way', /^\d+x\d+$/.test(diagB.canva
 await page2.screenshot({ path: 'test/browser/globe-webgl2.png' });
 await page2.locator('#otent-globe').screenshot({ path: 'test/browser/globe-webgl2-canvas.png' });
 
+// ---------------------------------------------------------------------------
+// The weather view, on whichever backend `page2` holds (WebGL 2) and on
+// `page` (WebGPU). The counts are the point: a surface that uploaded zero
+// vertices, a clock that never moved and a view that stayed empty all
+// look like "the weather is loading" in a screenshot.
+async function weatherChecks(p, label) {
+  await p.goto(BASE + '/#weather', { waitUntil: 'networkidle', timeout: 120000 });
+  await p.waitForTimeout(10000);
+  const a = await p.evaluate(() => ({ ...window.__otent }));
+  await p.waitForTimeout(1500);
+  const b = await p.evaluate(() => ({ ...window.__otent }));
+  const mesh = b.gpuWxMesh ?? b.glWxMesh ?? 0;
+  const lines = b.gpuWxLines ?? b.glWxLines ?? 0;
+  const loaded = await p.evaluate(() => (document.querySelector('.otent-overlay')?.innerText.match(/frames (\d+)\/(\d+)/) || []).slice(1).map(Number));
+  check(`${label}: every forecast frame arrived`, loaded.length === 2 && loaded[0] === loaded[1] && loaded[1] > 0,
+        `frames ${loaded.join('/')}`);
+  check(`${label}: the pressure surface is uploaded (91 x 181 vertices)`, mesh === 91 * 181, `mesh=${mesh}`);
+  check(`${label}: isobars, rain and wind trails are uploaded`, lines > 10000, `lines=${lines}`);
+  check(`${label}: the forecast clock is playing`, a.wxFrame && (b.frames > a.frames), `${a.wxFrame} -> ${b.wxFrame}`);
+  const labels = await p.evaluate(() => [...document.querySelectorAll('.otent-wx-label')].filter(e => e.style.display !== 'none').map(e => e.textContent));
+  check(`${label}: at least one 低/高 centre is labelled`, labels.some(t => /^[低高] \d{3,4}$/.test(t)), labels.slice(0, 4).join(', '));
+  if (b.glError !== undefined) check(`${label}: no GL error`, b.glError === 0, `glError=${b.glError}`);
+}
+await weatherChecks(page2, 'weather (webgl2)');
+await weatherChecks(page, 'weather (webgpu)');
+await page.screenshot({ path: 'test/browser/weather-webgpu.png' });
+
 await browser.close();
 
 const failed = results.filter(r => !r.ok);

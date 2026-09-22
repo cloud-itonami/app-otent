@@ -379,3 +379,49 @@
   (testing "and degenerate rings do not break the batch"
     (let [m (s/surface->mesh [{:c "ocean" :r nil} {:c "ocean" :r [1.0 2.0]}] 0.001)]
       (is (empty? (:vertices m))))))
+
+(deftest the-centre-of-the-screen-is-the-point-below-the-camera
+  (let [cam {:lat-deg 35.0 :lon-deg 139.0 :distance 3.0 :fov-deg 45.0 :aspect 1.5}
+        {:keys [lat-deg lon-deg alt-km]} (s/pick cam 0.0 0.0)]
+    (is (< (Math/abs (- 35.0 lat-deg)) 1e-6))
+    (is (< (Math/abs (- 139.0 lon-deg)) 1e-6))
+    (is (< (Math/abs alt-km) 1e-6)))
+  (testing "the corner of a far view misses the planet"
+    (is (nil? (s/pick {:lat-deg 0.0 :lon-deg 0.0 :distance 8.0} 1.0 1.0))))
+  (testing "up on the screen is north"
+    (let [a (s/pick {:lat-deg 10.0 :lon-deg 20.0 :distance 3.0} 0.0 0.2)]
+      (is (> (:lat-deg a) 10.0)))))
+
+(deftest pick-and-project-agree
+  (let [cam {:lat-deg -20.0 :lon-deg 60.0 :distance 2.5 :fov-deg 45.0 :aspect 1.25}
+        {:keys [eye view-proj]} (s/orbit-camera cam)]
+    (doseq [[x y] [[0.3 -0.2] [-0.5 0.4] [0.1 0.1]]]
+      (let [{:keys [lat-deg lon-deg]} (s/pick cam x y)
+            [px py vis?] (s/project view-proj eye (s/lat-lon->globe lat-deg lon-deg))]
+        (is (< (Math/abs (- x px)) 1e-6))
+        (is (< (Math/abs (- y py)) 1e-6))
+        (is vis?)))
+    (testing "the antipode is hidden by the planet"
+      (is (false? (nth (s/project view-proj eye (s/lat-lon->globe 20.0 -120.0)) 2))))))
+
+(deftest tilt-zero-is-the-original-camera
+  ;; the camera every other view was built and tested against
+  (let [cam {:lat-deg 35.0 :lon-deg 139.0 :distance 3.0 :fov-deg 45.0 :aspect 1.5}
+        eye (s/lat-lon->globe 35.0 139.0 (* s/earth-radius-km 2.0))
+        old (s/look-at eye [0.0 0.0 0.0] [0.0 1.0 0.0])
+        new (:view (s/orbit-camera cam))]
+    (doseq [k (range 16)]
+      (is (< (Math/abs (- (nth old k) (nth new k))) 1e-9) (str "element " k)))))
+
+(deftest a-tilted-camera-looks-north-and-still-picks-true
+  (let [cam {:lat-deg 30.0 :lon-deg 140.0 :distance 1.2 :fov-deg 45.0 :aspect 1.4 :tilt-deg 45.0}
+        {:keys [eye view-proj]} (s/orbit-camera cam)
+        centre (s/pick cam 0.0 0.0)]
+    (is (> (:lat-deg centre) 30.5) "the centre of the view is north of the point below")
+    (is (< (Math/abs (- 140.0 (:lon-deg centre))) 1e-6) "and on the same meridian")
+    (doseq [[x y] [[0.3 -0.4] [-0.5 -0.2] [0.0 0.1]]]
+      (when-let [{:keys [lat-deg lon-deg]} (s/pick cam x y)]
+        (let [[px py vis?] (s/project view-proj eye (s/lat-lon->globe lat-deg lon-deg))]
+          (is (< (Math/abs (- x px)) 1e-6))
+          (is (< (Math/abs (- y py)) 1e-6))
+          (is vis?))))))

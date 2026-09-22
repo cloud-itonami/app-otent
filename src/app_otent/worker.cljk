@@ -101,6 +101,12 @@
       (str/starts-with? path "/api/basemap/")
       (api/basemap-object env (subs path (count "/api/basemap/")))
 
+      (= "/api/weather" path)
+      (api/weather-manifest env)
+
+      (str/starts-with? path "/api/weather/")
+      (api/weather-object env (subs path (count "/api/weather/")))
+
       (str/starts-with? path "/api/objects/")
       (api/objects env (subs path (count "/api/objects/")) ctx)
 

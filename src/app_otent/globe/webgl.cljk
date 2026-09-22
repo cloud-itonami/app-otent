@@ -154,6 +154,25 @@ void main() {
   outColor = vec4(v_colour, a);
 }")
 
+(def ^:private wx-vs "#version 300 es
+precision highp float;
+layout(location=0) in vec3 a_pos;
+layout(location=1) in vec4 a_colour;
+uniform mat4 u_view_proj;
+out vec4 v_colour;
+void main() {
+  v_colour = a_colour;
+  vec4 p = u_view_proj * vec4(a_pos, 1.0);
+  p.z = 2.0 * p.z - p.w;
+  gl_Position = p;
+}")
+
+(def ^:private wx-fs "#version 300 es
+precision highp float;
+in vec4 v_colour;
+out vec4 outColor;
+void main() { outColor = v_colour; }")
+
 (defn- compile-shader [gl type src]
   (let [s (.createShader gl type)]
     (.shaderSource gl s src)
@@ -195,6 +214,10 @@ void main() {
      :building-prog (program gl building-vs building-fs)
      :surface-prog (program gl surface-vs surface-fs)
      :marker-prog (program gl marker-vs marker-fs)
+     :wx-prog (program gl wx-vs wx-fs)
+     :wx-mesh (atom nil)
+     :wx-under (atom nil)
+     :wx-over (atom nil)
      :tiles (atom {})        ; {tile-key {:vao :count :tex}}
      :lines (atom nil)
      :markers (atom nil)
@@ -306,9 +329,60 @@ void main() {
     (.bindVertexArray gl nil)
     (reset! markers {:vao vao :count (/ (count verts) 7)})))
 
+(defn- wx-vao
+  "A VAO over one dynamic vertex buffer in the weather layout: position 3 +
+  RGBA 4 = 28 bytes."
+  [gl]
+  (let [vao (.createVertexArray gl)
+        vbo (.createBuffer gl)]
+    (.bindVertexArray gl vao)
+    (.bindBuffer gl (.-ARRAY_BUFFER gl) vbo)
+    (.enableVertexAttribArray gl 0)
+    (.vertexAttribPointer gl 0 3 (.-FLOAT gl) false 28 0)
+    (.enableVertexAttribArray gl 1)
+    (.vertexAttribPointer gl 1 4 (.-FLOAT gl) false 28 12)
+    (.bindVertexArray gl nil)
+    {:vao vao :vbo vbo}))
+
+(defn- upload-dynamic! [gl vbo ^js verts count]
+  (.bindBuffer gl (.-ARRAY_BUFFER gl) vbo)
+  ;; A subarray view, not a copy: only `count` vertices of the scratch
+  ;; array are this frame's.
+  (.bufferData gl (.-ARRAY_BUFFER gl) (.subarray verts 0 (* 7 count)) (.-DYNAMIC_DRAW gl)))
+
+(defn set-wx-mesh!
+  "The pressure surface; see `webgpu/set-wx-mesh!`. Indices are uploaded
+  when given and kept otherwise."
+  [{:keys [gl wx-mesh]} ^js verts count ^js indices]
+  (if (nil? verts)
+    (swap! wx-mesh assoc :count 0)
+    (let [m (if (:vao @wx-mesh) @wx-mesh (wx-vao gl))
+          _ (upload-dynamic! gl (:vbo m) verts count)
+          m (if-not indices
+              m
+              (let [ibo (or (:ibo m) (.createBuffer gl))]
+                ;; Bound while the VAO is: the element buffer binding is
+                ;; VAO state, and bound outside it the draw reads nothing.
+                (.bindVertexArray gl (:vao m))
+                (.bindBuffer gl (.-ELEMENT_ARRAY_BUFFER gl) ibo)
+                (.bufferData gl (.-ELEMENT_ARRAY_BUFFER gl) indices (.-STATIC_DRAW gl))
+                (.bindVertexArray gl nil)
+                (assoc m :ibo ibo :icount (.-length indices))))]
+      (reset! wx-mesh (assoc m :count count)))))
+
+(defn set-wx-lines!
+  "Weather line segments, `:under` or `:over` the surface."
+  [{:keys [gl wx-under wx-over]} which ^js verts count]
+  (let [a (if (= which :over) wx-over wx-under)]
+    (if (or (nil? verts) (zero? count))
+      (swap! a assoc :count 0)
+      (let [{:keys [vbo] :as m} (if (:vao @a) @a (wx-vao gl))]
+        (upload-dynamic! gl vbo verts count)
+        (reset! a (assoc m :count count))))))
+
 (defn draw!
-  [{:keys [gl canvas tile-prog line-prog marker-prog building-prog surface-prog
-           tiles lines markers buildings surface]}
+  [{:keys [gl canvas tile-prog line-prog marker-prog building-prog surface-prog wx-prog
+           tiles lines markers buildings surface wx-mesh wx-under wx-over]}
    {:keys [view-proj dpr]}]
   (let [w (.-width canvas) h (.-height canvas)]
     (.viewport gl 0 0 w h)
@@ -366,6 +440,31 @@ void main() {
       (.bindVertexArray gl vao)
       (.drawArrays gl (.-LINES gl) 0 count))
 
+    ;; 2a. weather -- wind and rain, the pressure surface, the isobars.
+    ;; Blended, depth-tested, not depth-written: the same state the WebGPU
+    ;; pipelines declare, set here by hand and put back afterwards.
+    (let [wx-on? (or (pos? (:count @wx-mesh 0)) (pos? (:count @wx-under 0))
+                     (pos? (:count @wx-over 0)))]
+      (when wx-on?
+        (.depthMask gl false)
+        (.useProgram gl wx-prog)
+        (.uniformMatrix4fv gl (.getUniformLocation gl wx-prog "u_view_proj")
+                           false (js/Float32Array. (clj->js view-proj)))
+        (when-let [{:keys [vao count]} (when (pos? (:count @wx-under 0)) @wx-under)]
+          (.bindVertexArray gl vao)
+          (.drawArrays gl (.-LINES gl) 0 count))
+        (when-let [{:keys [vao icount]} (when (pos? (:count @wx-mesh 0)) @wx-mesh)]
+          ;; back faces culled, as in the WebGPU pipeline: the far half of
+          ;; the shell must not show through the near half at the limb
+          (.enable gl (.-CULL_FACE gl))
+          (.bindVertexArray gl vao)
+          (.drawElements gl (.-TRIANGLES gl) icount (.-UNSIGNED_INT gl) 0)
+          (.disable gl (.-CULL_FACE gl)))
+        (when-let [{:keys [vao count]} (when (pos? (:count @wx-over 0)) @wx-over)]
+          (.bindVertexArray gl vao)
+          (.drawArrays gl (.-LINES gl) 0 count))
+        (.depthMask gl true)))
+
     ;; 3. markers -- depth TEST but no depth WRITE
     (when-let [{:keys [vao count]} (when (pos? (:count @markers 0)) @markers)]
       (.depthMask gl false)
@@ -388,4 +487,6 @@ void main() {
       (aset d "glMarkers" (:count @markers 0))
       (aset d "glBuildings" (:count @buildings 0))
       (aset d "glSurface" (:count @surface 0))
+      (aset d "glWxMesh" (:count @wx-mesh 0))
+      (aset d "glWxLines" (+ (:count @wx-under 0) (:count @wx-over 0)))
       (aset js/window "__otent" d))))

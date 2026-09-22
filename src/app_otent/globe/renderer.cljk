@@ -39,10 +39,12 @@
     :webgpu {:ensure-tile! gpu/ensure-tile! :drop-tiles! gpu/drop-tiles!
              :set-lines! gpu/set-lines! :set-markers! gpu/set-markers!
              :set-buildings! gpu/set-buildings! :set-surface! gpu/set-surface!
+             :set-wx-mesh! gpu/set-wx-mesh! :set-wx-lines! gpu/set-wx-lines!
              :draw! gpu/draw!}
     :webgl2 {:ensure-tile! gl/ensure-tile! :drop-tiles! gl/drop-tiles!
              :set-lines! gl/set-lines! :set-markers! gl/set-markers!
              :set-buildings! gl/set-buildings! :set-surface! gl/set-surface!
+             :set-wx-mesh! gl/set-wx-mesh! :set-wx-lines! gl/set-wx-lines!
              :draw! gl/draw!}
     nil))
 
@@ -63,6 +65,12 @@
 
 (defn set-surface! [state mesh]
   (when-let [d (dispatch state)] ((:set-surface! d) state mesh)))
+
+(defn set-wx-mesh! [state verts count indices]
+  (when-let [d (dispatch state)] ((:set-wx-mesh! d) state verts count indices)))
+
+(defn set-wx-lines! [state which verts count]
+  (when-let [d (dispatch state)] ((:set-wx-lines! d) state which verts count)))
 
 (defn draw! [state frame]
   (when-let [d (dispatch state)] ((:draw! d) state frame)))

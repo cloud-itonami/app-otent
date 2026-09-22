@@ -153,6 +153,29 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
   return vec4<f32>(i.colour, a);
 }")
 
+(def ^:private wx-wgsl "
+struct Uniforms { view_proj: mat4x4<f32>, unused: vec4<f32> };
+@group(0) @binding(0) var<uniform> u: Uniforms;
+
+struct VOut {
+  @builtin(position) pos: vec4<f32>,
+  @location(0) colour: vec4<f32>,
+};
+
+// The weather passes: the pressure surface, the isobars on it, the wind
+// trails and the rain columns. Every vertex carries its own RGBA, so one
+// shader serves triangles and lines alike.
+@vertex
+fn vs(@location(0) p: vec3<f32>, @location(1) c: vec4<f32>) -> VOut {
+  var o: VOut;
+  o.pos = u.view_proj * vec4<f32>(p, 1.0);
+  o.colour = c;
+  return o;
+}
+
+@fragment
+fn fs(i: VOut) -> @location(0) vec4<f32> { return i.colour; }")
+
 (defn available?
   "Is there a WebGPU adapter at all? Async, because `requestAdapter` is."
   []
@@ -213,7 +236,11 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
                     (let [^js ctx (.getContext canvas "webgpu")
                           fmt (.getPreferredCanvasFormat ^js js/navigator.gpu)]
                       (.configure ctx #js {:device device :format fmt :alphaMode "opaque"})
-                      (let [mk (fn [wgsl layout blend? topology]
+                      (let [mk (fn mk
+                                 ([wgsl layout blend? topology]
+                                  (mk wgsl layout blend? topology
+                                      (if (= topology "triangle-list") "back" "none")))
+                                 ([wgsl layout blend? topology cull]
                                  (.createRenderPipeline
                                   ^js device
                                   #js {:layout "auto"
@@ -231,11 +258,13 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
                                                                            :alpha {:srcFactor "one"
                                                                                    :dstFactor "one-minus-src-alpha"}}))])}
                                        :primitive #js {:topology topology
-                                                       :cullMode (if (= topology "triangle-list")
-                                                                   "back" "none")}
+                                                       :cullMode cull}
                                        :depthStencil #js {:format "depth24plus"
                                                           :depthWriteEnabled (not blend?)
-                                                          :depthCompare "less-equal"}}))]
+                                                          :depthCompare "less-equal"}})))
+                            wx-layout (clj->js [{:arrayStride 28
+                                                 :attributes [{:shaderLocation 0 :offset 0 :format "float32x3"}
+                                                              {:shaderLocation 1 :offset 12 :format "float32x4"}]}])]
                         {:backend :webgpu
                          :device device :ctx ctx :canvas canvas :format fmt
                          :depth (atom nil)
@@ -271,6 +300,15 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
                                                      {:shaderLocation 1 :offset 12 :format "float32x3"}
                                                      {:shaderLocation 2 :offset 24 :format "float32"}]}])
                              true "triangle-list")
+                         ;; Back faces CULLED on the pressure surface: it is a
+                         ;; translucent shell around the planet, and without
+                         ;; culling its far half shows through its near half
+                         ;; beyond the limb as a second, mirrored layer. The
+                         ;; triangles wind counter-clockwise seen from outside
+                         ;; (see `weather/shell-indices`), so a funnel's walls
+                         ;; still face the reader.
+                         :wx-mesh-pipeline (mk wx-wgsl wx-layout true "triangle-list" "back")
+                         :wx-line-pipeline (mk wx-wgsl wx-layout true "line-list")
                          :sampler (.createSampler ^js device #js {:magFilter "linear"
                                                               :minFilter "linear"
                                                               :mipmapFilter "linear"
@@ -288,7 +326,7 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
                          ;; dynamic offsets into one buffer would also work and
                          ;; are harder to read.
                          :uniforms
-                         (into {} (for [k [:tile :line :marker :building :surface]]
+                         (into {} (for [k [:tile :line :marker :building :surface :wx]]
                                     [k (.createBuffer ^js device
                                                       #js {:size 96
                                                            :usage (bit-or js/GPUBufferUsage.UNIFORM
@@ -297,7 +335,10 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
                          :lines (atom nil)
                          :markers (atom nil)
                          :buildings (atom nil)
-                         :surface (atom nil)}))))))))
+                         :surface (atom nil)
+                         :wx-mesh (atom nil)
+                         :wx-under (atom nil)
+                         :wx-over (atom nil)}))))))))
         (.catch (fn [_] nil)))))
 
 (defn- tile-key [{:keys [z x y]}] (str z "/" x "/" y))
@@ -398,6 +439,59 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
                                         :entries (clj->js [{:binding 0
                                                             :resource {:buffer (:marker uniforms) :size 96}}])})}))
 
+(defn- ensure-capacity!
+  "A vertex (or index) buffer at least `bytes` long, reusing `old` when it
+  already is. The weather geometry is rewritten every frame while the
+  forecast plays; allocating a buffer per frame is how a GPU heap grows
+  until the tab is killed."
+  [^js device old bytes usage]
+  (if (and old (>= (:cap old) bytes))
+    old
+    (do (some-> ^js (:buf old) (.destroy))
+        {:buf (.createBuffer device #js {:size (max 16 (* 2 bytes))
+                                         :usage (bit-or usage js/GPUBufferUsage.COPY_DST)})
+         :cap (max 16 (* 2 bytes))})))
+
+(defn- wx-bind [^js device ^js pipeline uniforms]
+  (.createBindGroup device
+                    #js {:layout (.getBindGroupLayout pipeline 0)
+                         :entries (clj->js [{:binding 0 :resource {:buffer (:wx uniforms) :size 96}}])}))
+
+(defn set-wx-mesh!
+  "The pressure surface. `verts` is a Float32Array of 7 floats per vertex
+  (`count` of them); `indices` is uploaded when given and kept otherwise --
+  the triangulation never changes, only the heights and colours do. A nil
+  `verts` hides the surface."
+  [{:keys [^js device wx-mesh ^js wx-mesh-pipeline uniforms]} ^js verts count ^js indices]
+  (if (nil? verts)
+    (swap! wx-mesh assoc :count 0)
+    (let [^js q (.-queue device)
+          old @wx-mesh
+          vb (ensure-capacity! device (:vb old) (* 4 7 count) js/GPUBufferUsage.VERTEX)
+          ib (if indices
+               (ensure-capacity! device (:ib old) (.-byteLength indices) js/GPUBufferUsage.INDEX)
+               (:ib old))]
+      (.writeBuffer q (:buf vb) 0 verts 0 (* 7 count))
+      (when indices (.writeBuffer q (:buf ib) 0 indices))
+      (reset! wx-mesh {:vb vb :ib ib :count count
+                       :icount (if indices (.-length indices) (:icount old))
+                       :bind (or (:bind old) (wx-bind device wx-mesh-pipeline uniforms))}))))
+
+(defn set-wx-lines!
+  "Weather line segments, 7 floats per vertex. `which` is `:under` (wind
+  and rain, drawn beneath the surface) or `:over` (isobars, drawn on it).
+  Two buffers because blending is order-dependent: a line drawn before the
+  translucent surface is tinted by it, and isobars must not be."
+  [{:keys [^js device wx-under wx-over ^js wx-line-pipeline uniforms]} which ^js verts count]
+  (let [a (if (= which :over) wx-over wx-under)]
+    (if (or (nil? verts) (zero? count))
+      (swap! a assoc :count 0)
+      (let [old @a
+            vb (ensure-capacity! device (:vb old) (* 4 7 count) js/GPUBufferUsage.VERTEX)]
+        (.writeBuffer ^js (.-queue device) (:buf vb) 0 verts 0 (* 7 count))
+        (reset! a {:vb vb :count count
+                   :bind (or (:bind old) (wx-bind device wx-line-pipeline uniforms))})))))
+
 (defn- ensure-depth! [{:keys [^js device ^js canvas depth]}]
   (let [w (.-width canvas) h (.-height canvas)
         cur @depth]
@@ -414,7 +508,8 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
 (defn draw!
   [{:keys [^js device ^js ctx ^js canvas uniforms ^js tile-pipeline ^js line-pipeline
            ^js marker-pipeline ^js building-pipeline ^js surface-pipeline
-           tiles lines markers buildings surface] :as state}
+           ^js wx-mesh-pipeline ^js wx-line-pipeline
+           tiles lines markers buildings surface wx-mesh wx-under wx-over] :as state}
    {:keys [view-proj dpr]}]
   (let [^js q (.-queue device)
         ^js depth-tex (ensure-depth! state)
@@ -430,6 +525,7 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
               (write! :building [0.6 0.5 0.6 0.0])
               (write! :surface [0.0 0.0 0.0 0.0])
               (write! :line [0.55 0.75 0.9 0.55])
+              (write! :wx [0.0 0.0 0.0 0.0])
               (write! :marker [(.-width canvas) (.-height canvas) (or dpr 1.0) 0.0]))
         ^js enc (.createCommandEncoder device)
         ^js pass (.beginRenderPass
@@ -476,6 +572,24 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
       (.setVertexBuffer pass 0 vbuf)
       (.draw pass count))
 
+    ;; 2a. weather: wind and rain, then the pressure surface, then the
+    ;; isobars on it. All blended, none writing depth, all depth-TESTED so
+    ;; the planet hides the far side of the weather.
+    (let [lines! (fn [a]
+                   (when-let [{:keys [vb count ^js bind]} (when (pos? (:count @a 0)) @a)]
+                     (.setPipeline pass wx-line-pipeline)
+                     (.setBindGroup pass 0 bind)
+                     (.setVertexBuffer pass 0 (:buf vb))
+                     (.draw pass count)))]
+      (lines! wx-under)
+      (when-let [{:keys [vb ib icount ^js bind]} (when (pos? (:count @wx-mesh 0)) @wx-mesh)]
+        (.setPipeline pass wx-mesh-pipeline)
+        (.setBindGroup pass 0 bind)
+        (.setVertexBuffer pass 0 (:buf vb))
+        (.setIndexBuffer pass (:buf ib) "uint32")
+        (.drawIndexed pass icount))
+      (lines! wx-over))
+
     ;; 3. markers -- six vertices per instance
     ;; An empty set is skipped, not drawn: WebGPU warns on every
     ;; instance-count-0 draw, and a console full of warnings is where a real
@@ -496,4 +610,6 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
       (aset d "gpuTiles" (count @tiles))
       (aset d "gpuBuildings" (:count @buildings 0))
       (aset d "gpuSurface" (:count @surface 0))
+      (aset d "gpuWxMesh" (:count @wx-mesh 0))
+      (aset d "gpuWxLines" (+ (:count @wx-under 0) (:count @wx-over 0)))
       (aset js/window "__otent" d))))

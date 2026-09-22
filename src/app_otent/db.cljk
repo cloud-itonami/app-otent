@@ -24,6 +24,23 @@
 
 (def kinds [:satellite :quake :aircraft :fire :vessel])
 
+(def default-weather
+  "The weather view's state. The fields themselves are NOT here -- 36
+  frames of typed arrays are not values, and `assoc` would walk them; they
+  live beside the GPU state in `app-otent.core`. What is here is what the
+  UI asks: which frames exist, which have arrived, where the clock is."
+  {:status :idle
+   :manifest nil
+   :loaded #{}
+   :t nil
+   :playing? true
+   :speed 3.0            ; simulated hours per real second
+   :mode :pressure
+   :exaggeration 1.0
+   :show {:isobars true :wind true :rain true}
+   :probe nil
+   :detail nil})
+
 (def default-db
   {:view :globe
    :camera {:lat-deg 20.0 :lon-deg 140.0 :distance 3.2 :fov-deg 45.0}
@@ -32,6 +49,7 @@
    :layers (into {} (map (fn [k] [k {:status :idle :objects [] :refused []}])) kinds)
    :basemap {:status :idle :manifest nil}
    :buildings {:status :idle :areas []}
+   :weather default-weather
    :selected nil})
 
 (defn layer [db k] (get-in db [:layers k]))
@@ -148,3 +166,75 @@
 
 (defn zoom-camera [camera delta]
   (clamp-camera (update camera :distance * (Math/exp (* 0.0015 delta)))))
+
+;; ---------------------------------------------------------------- weather
+
+(defn weather-times
+  "Frame instants as epoch ms."
+  [wx]
+  (mapv (fn [f] (.getTime (js/Date. (:t f)))) (get-in wx [:manifest :frames])))
+
+(defn weather-span
+  "`[first-ms last-ms]`, or nil before a manifest has arrived."
+  [wx]
+  (let [ts (weather-times wx)]
+    (when (seq ts) [(first ts) (peek ts)])))
+
+(defn weather-start-t
+  "Where the clock starts: now, if the forecast covers now (it normally
+  does -- the ingest asks from 24 h back), otherwise the first frame. Not
+  the first frame unconditionally: opening the page on yesterday's weather
+  reads as the page being a day stale."
+  [wx now-ms]
+  (when-let [[a b] (weather-span wx)]
+    (max a (min b now-ms))))
+
+(defn frames-needed
+  "The frame indices the clock needs at `t`: the two either side of it."
+  [wx t]
+  (let [ts (weather-times wx)
+        n (count ts)]
+    (cond
+      (zero? n) #{}
+      (<= t (first ts)) #{0}
+      (>= t (peek ts)) #{(dec n)}
+      :else (let [i (count (take-while #(<= % t) ts))]
+              #{(dec i) i}))))
+
+(defn advance-weather
+  "Move the clock `dt-ms` of real time forward at `:speed` hours/second,
+  looping from the end back to the start.
+
+  Holds -- does not advance -- while a frame the clock needs has not
+  arrived. Advancing through an unloaded frame would interpolate from
+  whatever was last uploaded, and a forecast that jumps when the bytes
+  catch up looks like weather doing something."
+  [wx dt-ms]
+  (let [[a b] (weather-span wx)
+        t (:t wx)]
+    (if (or (not (:playing? wx)) (nil? a) (nil? t)
+            (not (every? (:loaded wx) (frames-needed wx t))))
+      wx
+      (let [t' (+ t (* dt-ms 0.001 (:speed wx) 3600000.0))]
+        (assoc wx :t (if (> t' b) a t'))))))
+
+(defn describe-lead
+  "\"+22h\" ahead of now, \"-6h\" behind it: which half of the playback is
+  forecast and which is analysis, said in hours."
+  [t now-ms]
+  (let [h (Math/round (/ (- t now-ms) 3600000.0))]
+    (cond (pos? h) (str "予報 +" h "時間")
+          (neg? h) (str "解析 " h "時間")
+          :else "現在")))
+
+(defn- pad2 [n] (if (< n 10) (str "0" n) (str n)))
+
+(defn format-utc [ms]
+  (let [d (js/Date. ms)]
+    (str (.getUTCFullYear d) "-" (pad2 (inc (.getUTCMonth d))) "-" (pad2 (.getUTCDate d))
+         " " (pad2 (.getUTCHours d)) ":" (pad2 (.getUTCMinutes d)) " UTC")))
+
+(defn format-jst [ms]
+  (let [d (js/Date. (+ ms (* 9 3600000)))]
+    (str (inc (.getUTCMonth d)) "/" (.getUTCDate d) " " (pad2 (.getUTCHours d)) ":"
+         (pad2 (.getUTCMinutes d)) " JST")))
