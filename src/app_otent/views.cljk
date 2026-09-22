@@ -18,7 +18,8 @@
   (:require [kotoba.lang.text :as str]
             [jp-go-dds.core :as dds]
             [app-otent.route :as route]
-            [app-otent.db :as db]))
+            [app-otent.db :as db]
+            [app-otent.weather :as wx]))
 
 (def app-css
   "Layout for the one thing DADS does not have: a full-bleed GPU surface.
@@ -67,7 +68,17 @@
                  gap: var(--hig-spacing-1); }
 .otent-foot { font-size: var(--hig-text-caption1-font-size);
                color: var(--hig-color-secondary-label); }
+.otent-wx-row { display:flex; flex-wrap:wrap; align-items:center; gap: var(--hig-spacing-1); }
+.otent-wx-time { font-size: var(--hig-text-headline-font-size); font-variant-numeric: tabular-nums; } .otent-wx-labels { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
+.otent-range { inline-size:100%; accent-color: var(--hig-color-tint); } .otent-ramp { block-size:.6rem; border-radius: var(--hig-radius-sm); }
+.otent-ramp-ticks { display:flex; justify-content:space-between; font-size: var(--hig-text-caption1-font-size); }
+.otent-wx-label { position:absolute; transform:translate(-50%,-50%); font-weight:700; line-height:1.1; text-align:center; white-space:nowrap; text-shadow: 0 0 .25rem var(--hig-color-system-background); }
 ")
+
+;; `.otent-wx-label` has no colour on purpose: a low's red and a high's
+;; blue are set by the render loop from `app-otent.weather`, because they are
+;; marks on the globe like the marker kinds, not UI, and the design system
+;; has no token for either.
 
 (defn expand
   "Resolve function-headed hiccup into plain hiccup.
@@ -181,6 +192,122 @@
       {:type :error :heading "この端末では地球儀を描画できません"}
       "WebGPU も WebGL 2.0 も利用できません。データは下の一覧で読めます。"])])
 
+(defn- ramp-css
+  "A CSS gradient drawn from the same stops the surface is coloured with,
+  so the legend cannot disagree with the globe."
+  [stops]
+  (let [lo (ffirst stops) hi (first (peek stops))]
+    (str "linear-gradient(to right,"
+         (str/join ","
+                   (for [[x r g b] stops]
+                     (str "rgb(" (Math/round (* 255 r)) "," (Math/round (* 255 g)) ","
+                          (Math/round (* 255 b)) ") "
+                          (Math/round (* 100 (/ (- x lo) (- hi lo)))) "%")))
+         ")")))
+
+(def weather-modes [[:pressure "気圧"] [:temperature "気温"] [:humidity "湿度"]])
+(def weather-speeds [[1.0 "1時間/秒"] [3.0 "3時間/秒"] [6.0 "6時間/秒"] [12.0 "12時間/秒"]])
+(def weather-exaggerations [[0.5 "×0.5"] [1.0 "×1"] [2.0 "×2"] [3.0 "×3"]])
+(def camera-tilts [[0.0 "真上"] [45.0 "斜め"] [70.0 "低空"]])
+
+(defn- fmt1 [x] (if (nil? x) "–" (str (/ (Math/round (* 10.0 x)) 10.0))))
+
+(defn- compass [deg]
+  (nth ["北" "北北東" "北東" "東北東" "東" "東南東" "南東" "南南東"
+        "南" "南南西" "南西" "西南西" "西" "西北西" "北西" "北北西"]
+       (mod (Math/round (/ deg 22.5)) 16)))
+
+(defn weather-probe
+  "What the fields say under the pointer."
+  [{:keys [lat lon hpa celsius wind-ms wind-from-deg rh mmh]}]
+  [:div {:class "otent-plaque otent-foot" :aria-live "polite"}
+   [:div (str (fmt1 lat) "°, " (fmt1 lon) "°")]
+   [:div (str "気圧 " (fmt1 hpa) " hPa · 気温 " (fmt1 celsius) " °C · 湿度 " (fmt1 rh) " %")]
+   [:div (str "風 " (if wind-from-deg (str (compass wind-from-deg) " ") "") (fmt1 wind-ms) " m/s · 降水 "
+              (fmt1 mmh) " mm/h")]])
+
+(defn weather-overlay
+  "The weather controls. `on-weather` is called with `[:play]`, `[:seek h]`,
+  `[:speed v]`, `[:mode k]`, `[:exaggeration v]` or `[:toggle k]` -- passed
+  in so this stays a pure function, like `city-shortcuts`' `on-fly`."
+  [{:keys [weather now on-weather backend camera]}]
+  (let [{:keys [status manifest loaded t playing? speed mode exaggeration show probe detail]} weather
+        [a b] (db/weather-span weather)
+        frames (:frames manifest)
+        emit (fn [& ev] (when on-weather (on-weather (vec ev))))
+        {:keys [stops unit]} (get wx/colour-modes mode)]
+    [:div {:class "otent-overlay"}
+     [:div {:class "otent-plaque"}
+      [:div {:class "otent-foot"} "海面気圧を高さに、風を粒子に、降水を柱に — NOAA GFS"]
+      (case status
+        :unavailable
+        [:div [:strong "UNMEASURED"] " — " (or detail "no weather manifest")]
+        (:idle :loading) [:div "loading forecast…"]
+        [:div
+         [:div {:class "otent-wx-time"} (if t (db/format-jst t) "–")]
+         [:div {:class "otent-foot"}
+          (when t (str (db/format-utc t) " · " (db/describe-lead t now)))]
+         (when (and a b)
+           [:input {:class "otent-range" :type "range" :min 0
+                    :max (Math/round (/ (- b a) 3600000.0)) :step 1
+                    :value (if t (Math/round (/ (- t a) 3600000.0)) 0)
+                    :aria-label "forecast time, hours from the first frame"
+                    :on-change #(emit :seek (js/parseFloat (.. % -target -value)))}])
+         [:div {:class "otent-wx-row"}
+          [dds/button (if playing? "一時停止" "再生")
+           {:type :solid-fill :size "sm" :attrs {:on-click #(emit :play)}}]
+          (for [[v label] weather-speeds]
+            ^{:key v}
+            [dds/button label {:type (if (= v speed) :outline :text) :size "sm"
+                               :attrs {:on-click #(emit :speed v)
+                                       :aria-pressed (str (= v speed))}}])]
+         [:div {:class "otent-foot"}
+          (str "frames " (count loaded) "/" (count frames)
+               (when (seq (:refused manifest))
+                 (str " · refused " (count (:refused manifest)))))]])]
+     (when (= :loaded status)
+       [:div {:class "otent-plaque"}
+        [:div {:class "otent-wx-row"}
+         [:span {:class "otent-foot"} "色:"]
+         (for [[k label] weather-modes]
+           ^{:key k}
+           [dds/button label {:type (if (= k mode) :outline :text) :size "sm"
+                              :attrs {:on-click #(emit :mode k) :aria-pressed (str (= k mode))}}])]
+        [:div {:class "otent-ramp" :style {:background (ramp-css stops)}}]
+        [:div {:class "otent-ramp-ticks"}
+         [:span (str (ffirst stops) " " unit)] [:span (str (first (peek stops)) " " unit)]]
+        [:div {:class "otent-wx-row"}
+         [:span {:class "otent-foot"} "表示:"]
+         (for [[k label] [[:isobars "等圧線"] [:wind "風"] [:rain "降水"]]]
+           ^{:key k}
+           [dds/button label {:type (if (get show k) :outline :text) :size "sm"
+                              :attrs {:on-click #(emit :toggle k)
+                                      :aria-pressed (str (boolean (get show k)))}}])]
+        [:div {:class "otent-wx-row"}
+         [:span {:class "otent-foot"} "高さの誇張:"]
+         (for [[v label] weather-exaggerations]
+           ^{:key v}
+           [dds/button label {:type (if (= v exaggeration) :outline :text) :size "sm"
+                              :attrs {:on-click #(emit :exaggeration v)
+                                      :aria-pressed (str (= v exaggeration))}}])]
+        [:div {:class "otent-wx-row"}
+         [:span {:class "otent-foot"} "視点:"]
+         (for [[v label] camera-tilts
+               :let [on? (= v (or (:tilt-deg camera) 0.0))]]
+           ^{:key v}
+           [dds/button label {:type (if on? :outline :text) :size "sm"
+                              :attrs {:on-click #(emit :tilt v) :aria-pressed (str on?)}}])]
+        [:div {:class "otent-foot"}
+         (str "高さ = 海面気圧。1013 hPa で上空 " (Math/round wx/base-km) " km、1 hPa ごとに "
+              (* wx/km-per-hpa exaggeration) " km 上下。等圧線 4 hPa 毎(太線 20 hPa)。"
+              "粒子は地上 10 m の風をブラウザ内で積分した流線(粒子の時計は "
+              (Math/round (wx/particle-hours-per-second camera)) " 時間/秒、視点の高さに比例)。")]])
+     (when probe [weather-probe probe])
+     (when (= :none backend)
+       [dds/notification-banner
+        {:type :error :heading "この端末では地球儀を描画できません"}
+        "WebGPU も WebGL 2.0 も利用できません。"])]))
+
 (defn objects-view
   [{:keys [layers now]}]
   [dds/stack
@@ -220,7 +347,9 @@
             ["fire" "NASA FIRMS active fire detections" "free key required"
              "firms.modaps.eosdis.nasa.gov/usage"]
             ["vessel" "AISStream vessel positions" "free key + resident collector"
-             "aisstream.io/terms"]]}]
+             "aisstream.io/terms"]
+            ["weather" "NOAA GFS 0.5° (2° / 6-hourly subset), via PacIOOS ERDDAP ncep_global"
+             "no key" "NOAA -- public domain"]]}]
    [dds/heading 3 "Basemap"]
    [dds/table
     {:caption "Basemap layers"
@@ -272,6 +401,7 @@
   [id m]
   (case id
     :globe nil
+    :weather nil
     :objects [objects-view m]
     :sources [sources-view m]
     :about [about-view m]
@@ -300,8 +430,15 @@
       "お天道様は見ている — live public spatial intelligence, read from Cloudflare R2 Data Catalog."]
      [nav view]
      [:div {:class (str "otent-stage"
-                        (when-not (= :globe view) " otent-stage--hidden"))}
+                        (when-not (#{:globe :weather} view) " otent-stage--hidden"))}
       [:canvas {:class "otent-canvas" :id "otent-globe"
                 :aria-label "3D globe showing live public signals"}]
-      (when (= :globe view) [globe-overlay m])]
+      ;; Filled by the render loop, not by React: the labels move every
+      ;; frame with the camera, and re-rendering hiccup at 60 Hz to move
+      ;; twenty spans is the wrong tool.
+      [:div {:class "otent-wx-labels" :id "otent-wx-labels" :aria-hidden "true"}]
+      (case view
+        :globe [globe-overlay m]
+        :weather [weather-overlay m]
+        nil)]
      [dispatch-view view m]]]])

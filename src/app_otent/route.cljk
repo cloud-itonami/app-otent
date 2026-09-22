@@ -30,6 +30,9 @@
   [{:id :globe   :label "地球"     :nav? true
     :title "Globe"
     :blurb "Live public signals on a WebGPU globe, from the lake."}
+   {:id :weather :label "天気 3D"  :nav? true
+    :title "Weather"
+    :blurb "Sea-level pressure as a surface, wind as moving particles, rain as columns -- GFS, played forward."}
    {:id :objects :label "一覧"     :nav? true
     :title "Objects"
     :blurb "What the lake currently holds, per kind."}

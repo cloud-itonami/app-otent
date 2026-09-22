@@ -109,6 +109,32 @@
          (reduce + (for [k (range 4)]
                      (* (nth a (+ r (* 4 k))) (nth b (+ k (* 4 c)))))))))
 
+(defn camera-frame
+  "Where the orbit camera is and which way it looks: `{:eye :dir :up}`.
+
+  `:tilt-deg` 0 looks straight down at the point below, which is the
+  centre of the Earth -- the original camera. Larger tilts pitch the view
+  toward the northern horizon about the eye, so relief on the globe (the
+  pressure surface, buildings) is seen from the side rather than from
+  directly above, where every height collapses onto the page.
+
+  One function for both the matrix and `pick`, because a picking ray
+  built from a different basis than the view is a readout for the wrong
+  place that looks right near the centre of the screen."
+  [{:keys [lat-deg lon-deg distance tilt-deg] :or {lat-deg 0.0 lon-deg 0.0 distance 3.0 tilt-deg 0.0}}]
+  (let [d (max 1.00005 distance)
+        eye (lat-lon->globe lat-deg lon-deg (* earth-radius-km (- d 1.0)))
+        radial (normalize eye)
+        ;; the local north tangent at the eye; at the poles, north is
+        ;; undefined and world z stands in, as `up` did before
+        north (if (> (Math/abs lat-deg) 89.5)
+                [0.0 0.0 1.0]
+                (normalize (map - [0.0 1.0 0.0] (map #(* % (nth radial 1)) radial))))
+        t (* (max 0.0 (min 80.0 tilt-deg)) deg->rad)
+        dir (normalize (map + (map #(* % (- (Math/cos t))) radial) (map #(* % (Math/sin t)) north)))
+        up (normalize (map + (map #(* % (Math/sin t)) radial) (map #(* % (Math/cos t)) north)))]
+    {:eye eye :dir dir :up up :d d}))
+
 (defn orbit-camera
   "An orbiting camera as `{:eye :view :proj :view-proj}`.
 
@@ -116,14 +142,9 @@
   surface and anything below that is inside the planet -- clamped, because
   a camera inside the globe renders the inside of the sphere and reads as
   the globe having vanished."
-  [{:keys [lat-deg lon-deg distance fov-deg aspect]
-    :or {lat-deg 0.0 lon-deg 0.0 distance 3.0 fov-deg 45.0 aspect 1.0}}]
-  (let [d (max 1.00005 distance)
-        eye (lat-lon->globe lat-deg lon-deg (* earth-radius-km (- d 1.0)))
-        ;; Up is world-north except at the poles, where north is the view
-        ;; direction and the cross product collapses.
-        up (if (> (Math/abs lat-deg) 89.5) [0.0 0.0 1.0] [0.0 1.0 0.0])
-        view (look-at eye [0.0 0.0 0.0] up)
+  [{:keys [fov-deg aspect] :or {fov-deg 45.0 aspect 1.0} :as camera}]
+  (let [{:keys [eye dir up d]} (camera-frame camera)
+        view (look-at eye (map + eye dir) up)
         proj (perspective (* fov-deg deg->rad) aspect
                           ;; Near clip scales with HEIGHT ABOVE THE SURFACE,
                           ;; not with distance from the centre. A fixed
@@ -381,3 +402,44 @@
              x (range (max (:x0 a) (- cx 1)) (inc (min (:x1 a) (+ cx 1))))
              y (range (max (:y0 a) (- cy 1)) (inc (min (:y1 a) (+ cy 1))))]
          {:z z :x x :y y})))))
+
+;; ---------------------------------------------------------------- picking
+
+(defn pick
+  "The place under a point on the screen, or nil if the ray misses the
+  planet. `ndc-x`/`ndc-y` are -1..1, y up.
+
+  Ray from the camera's eye along `camera-frame`'s basis, intersected with
+  the unit sphere -- the ground, not the pressure surface, because a
+  readout says what the weather is *at a place*."
+  [{:keys [fov-deg aspect] :or {fov-deg 45.0 aspect 1.0} :as camera} ndc-x ndc-y]
+  (let [{:keys [eye dir up]} (camera-frame camera)
+        s (normalize (cross dir up))
+        k (Math/tan (/ (* fov-deg deg->rad) 2.0))
+        ray (normalize (map + dir
+                            (map #(* % ndc-x k aspect) s)
+                            (map #(* % ndc-y k) up)))
+        b (dot eye ray)
+        c (- (dot eye eye) 1.0)
+        disc (- (* b b) c)]
+    (when (>= disc 0.0)
+      (let [t (- (- b) (Math/sqrt disc))]
+        (when (pos? t)
+          (globe->lat-lon (map + eye (map #(* t %) ray))))))))
+
+(defn project
+  "A point in the scene -> `[ndc-x ndc-y visible?]` through `view-proj`.
+
+  `visible?` is false behind the camera or behind the planet's limb; a
+  label for a low on the far side of the Earth is drawn through it
+  otherwise, and reads as a low that is here."
+  [view-proj eye [x y z]]
+  (let [m view-proj
+        cx (+ (* (nth m 0) x) (* (nth m 4) y) (* (nth m 8) z) (nth m 12))
+        cy (+ (* (nth m 1) x) (* (nth m 5) y) (* (nth m 9) z) (nth m 13))
+        cw (+ (* (nth m 3) x) (* (nth m 7) y) (* (nth m 11) z) (nth m 15))
+        r (Math/sqrt (+ (* x x) (* y y) (* z z)))
+        ;; the surface point below p is visible from the eye iff its dot
+        ;; with the eye is at least 1 (the horizon of a unit sphere)
+        facing (/ (dot [x y z] eye) r)]
+    [(/ cx cw) (/ cy cw) (and (pos? cw) (>= facing 1.0))]))

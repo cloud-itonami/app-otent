@@ -1,0 +1,612 @@
+(ns app-otent.weather
+  "Weather in three dimensions: the pressure field as a surface you can fly
+  around, isobars on it, the wind as particles that actually travel, rain
+  as columns standing on the ground.
+
+  No GPU type, no canvas, no DOM: typed arrays in, typed arrays out. The
+  renderers only upload what this returns, which is why the whole
+  simulation is under test without a browser.
+
+  ## What is simulated, and what is not
+
+  Two different things move on this page, and they are not the same kind
+  of claim:
+
+  | | |
+  |---|---|
+  | the **fields** -- pressure, wind, temperature, rain | NOAA GFS, a numerical weather prediction model, as ingested by `cloud-itonami/otent`. Between two 6-hourly frames the field is interpolated linearly in time, and nothing here pretends otherwise. |
+  | the **particles** | integrated here, in the browser, through that wind: `dlat = v dt / R`, `dlon = u dt / (R cos lat)`, bilinear in space and linear in time. A particle crossing the Pacific in the playback crossed it at the speed GFS says the wind blows. |
+
+  The model is GFS's. The trajectories are ours, and they are physical --
+  a tracer carried by the 10 m wind -- not decoration drawn in the wind's
+  general direction.
+
+  ## Height is pressure
+
+  The surface floats at `base-km` above the ground where the sea-level
+  pressure is 1013.25 hPa, and moves `km-per-hpa` up or down per hPa away
+  from it, times the reader's exaggeration. A typhoon is a funnel and a
+  blocking high a dome. The mapping is linear and stated on the page;
+  there is no altitude in the atmosphere that the surface is claiming to
+  be at."
+  (:require [app-otent.globe.scene :as scene]))
+
+(def standard-pa 101325.0)
+(def base-km 450.0)
+(def km-per-hpa 7.0)
+(def floor-km 25.0)
+(def particle-alt-km 12.0)
+(def earth-radius-m 6371000.0)
+(def missing -32768)
+
+;; ---------------------------------------------------------------- decode
+
+(defn decode-frame
+  "An `OTWX` frame (ArrayBuffer) -> `{:fields {\"prmsl\" Float32Array ...}}`,
+  or `{:refused reason}` when its header disagrees with the manifest.
+
+  Checked against the manifest's shape, not trusted: a frame from a run
+  with a different grid, decoded with this one's, draws a sheared planet
+  with every value plausible."
+  [^js buf {:keys [grid vars]}]
+  (let [dv (js/DataView. buf)
+        tag (apply str (map #(js/String.fromCharCode (.getUint8 dv %)) (range 4)))
+        nv (.getUint16 dv 6 true)
+        nlat (.getUint16 dv 8 true)
+        nlon (.getUint16 dv 10 true)
+        n (* nlat nlon)]
+    (cond
+      (not= "OTWX" tag) {:refused :bad-magic}
+      (not= [nv nlat nlon] [(count vars) (:nlat grid) (:nlon grid)])
+      {:refused :shape-mismatch}
+      (< (.-byteLength buf) (+ 12 (* 2 n nv))) {:refused :truncated}
+      :else
+      {:fields
+       (into {}
+             (map-indexed
+              (fn [vi {:keys [id offset scale]}]
+                (let [a (js/Float32Array. n)
+                      base (+ 12 (* 2 n vi))]
+                  (dotimes [k n]
+                    (let [q (.getInt16 dv (+ base (* 2 k)) true)]
+                      (aset a k (if (= q missing) js/NaN (+ offset (* scale q))))))
+                  [(name id) a])))
+             vars)})))
+
+;; ---------------------------------------------------------------- time
+
+(defn frame-times
+  "The manifest's frames as epoch ms, in order."
+  [frames]
+  (mapv (fn [f] (.getTime (js/Date. (:t f)))) frames))
+
+(defn bracket
+  "`[i j w]`: the frames either side of `t` and how far between them.
+
+  Clamped at both ends: before the first frame is the first frame, after
+  the last is the last. Extrapolating a forecast past its own horizon is
+  inventing weather."
+  [times t]
+  (let [n (count times)]
+    (cond
+      (zero? n) nil
+      (or (= n 1) (<= t (first times))) [0 0 0.0]
+      (>= t (peek times)) [(dec n) (dec n) 0.0]
+      :else
+      (loop [i 0]
+        (let [a (nth times i) b (nth times (inc i))]
+          (if (< t b)
+            [i (inc i) (/ (- t a) (- b a))]
+            (recur (inc i))))))))
+
+(defn lerp-into!
+  "out = a + (b - a) w, elementwise. Returns out."
+  [^js out ^js a ^js b w]
+  (let [n (.-length out)]
+    (if (or (identical? a b) (zero? w))
+      (.set out a)
+      (dotimes [k n]
+        (let [x (aget a k)]
+          (aset out k (+ x (* w (- (aget b k) x)))))))
+    out))
+
+;; ---------------------------------------------------------------- space
+
+(defn sample
+  "Bilinear, wrapped in longitude, clamped in latitude. NaN in, NaN out --
+  a hole stays a hole rather than being averaged into its neighbours."
+  [{:keys [nlat nlon lat0 dlat lon0 dlon]} ^js a lat lon]
+  (let [fi (max 0.0 (min (dec nlat) (/ (- lat lat0) dlat)))
+        fj0 (/ (- lon lon0) dlon)
+        fj (let [m (mod fj0 nlon)] (if (neg? m) (+ m nlon) m))
+        i0 (min (- nlat 2) (int (Math/floor fi)))
+        j0 (int (Math/floor fj))
+        j1 (if (= (inc j0) nlon) 0 (inc j0))
+        ti (- fi i0) tj (- fj j0)
+        r0 (* i0 nlon) r1 (* (inc i0) nlon)
+        a00 (aget a (+ r0 j0)) a01 (aget a (+ r0 j1))
+        a10 (aget a (+ r1 j0)) a11 (aget a (+ r1 j1))]
+    (+ (* (- 1 ti) (+ (* (- 1 tj) a00) (* tj a01)))
+       (* ti (+ (* (- 1 tj) a10) (* tj a11))))))
+
+(defn pressure->alt-km
+  "Sea-level pressure (Pa) -> the surface's height above the ground."
+  [p exaggeration]
+  (max floor-km (+ base-km (* (/ (- p standard-pa) 100.0) km-per-hpa exaggeration))))
+
+;; ---------------------------------------------------------------- colour
+
+(defn- ramp
+  "Piecewise-linear colour ramp. `stops` is [[x r g b] ...], ascending."
+  [stops x]
+  (let [[x0 & _] (first stops)]
+    (if (<= x x0)
+      (subvec (first stops) 1)
+      (loop [[a b & more] stops]
+        (cond
+          (nil? b) (subvec a 1)
+          (<= x (first b))
+          (let [t (/ (- x (first a)) (- (first b) (first a)))]
+            [(+ (nth a 1) (* t (- (nth b 1) (nth a 1))))
+             (+ (nth a 2) (* t (- (nth b 2) (nth a 2))))
+             (+ (nth a 3) (* t (- (nth b 3) (nth a 3))))])
+          :else (recur (cons b more)))))))
+
+(def pressure-stops
+  "hPa. Low is violet-blue, standard is pale, high is amber: the order a
+  Japanese weather chart already teaches (低 cold colours, 高 warm)."
+  [[960.0 0.45 0.15 0.75] [990.0 0.20 0.40 0.95] [1008.0 0.55 0.80 0.95]
+   [1016.0 0.85 0.92 0.90] [1026.0 1.00 0.78 0.40] [1040.0 0.95 0.35 0.20]])
+
+(def temperature-stops
+  "Celsius."
+  [[-40.0 0.55 0.30 0.85] [-20.0 0.25 0.45 0.95] [0.0 0.55 0.90 0.95]
+   [12.0 0.55 0.90 0.50] [24.0 1.00 0.85 0.30] [32.0 1.00 0.45 0.15]
+   [42.0 0.75 0.10 0.15]])
+
+(def humidity-stops
+  "Percent."
+  [[0.0 0.80 0.60 0.35] [40.0 0.85 0.85 0.70] [70.0 0.45 0.80 0.75]
+   [100.0 0.15 0.45 0.90]])
+
+(def colour-modes
+  "Which field colours the surface, and how to read a value off it."
+  {:pressure {:field "prmsl" :stops pressure-stops :unit "hPa" :to-display #(/ % 100.0)}
+   :temperature {:field "t2m" :stops temperature-stops :unit "°C" :to-display #(- % 273.15)}
+   :humidity {:field "rh2m" :stops humidity-stops :unit "%" :to-display identity}})
+
+(defn colour-for [mode v]
+  (let [{:keys [stops to-display]} (get colour-modes mode (:pressure colour-modes))]
+    (ramp stops (to-display v))))
+
+;; ---------------------------------------------------------------- the surface
+
+(defn shell-indices
+  "Triangle indices for a `nlat x (nlon + 1)` vertex grid, wound
+  counter-clockwise seen from OUTSIDE the sphere (row 0 is north, columns
+  run east) -- the renderers cull back faces on that basis. The extra
+  column repeats column 0 so the seam at the antimeridian closes; without
+  it there is a 2-degree slot in the surface down the Pacific."
+  [{:keys [nlat nlon]}]
+  (let [w (inc nlon)
+        out (js/Uint32Array. (* 6 (dec nlat) nlon))]
+    (loop [i 0 k 0]
+      (when (< i (dec nlat))
+        (let [k (loop [j 0 k k]
+                  (if (= j nlon)
+                    k
+                    (let [a (+ (* i w) j) b (inc a) c (+ a w) d (inc c)]
+                      ;; a b / c d: north-west, north-east, south-west,
+                      ;; south-east. The scene frame is mirrored (x = -cos
+                      ;; sin theta), so a-b-c -- clockwise on a map -- is
+                      ;; counter-clockwise seen from outside. Pinned by
+                      ;; `the-surface-faces-outward`, which caught the
+                      ;; opposite winding before it shipped.
+                      (aset out k a) (aset out (+ k 1) b) (aset out (+ k 2) c)
+                      (aset out (+ k 3) b) (aset out (+ k 4) d) (aset out (+ k 5) c)
+                      (recur (inc j) (+ k 6)))))]
+          (recur (inc i) k))))
+    out))
+
+(def shell-stride 7)
+
+(def ^:private basis-cache (atom {}))
+
+(defn shell-basis
+  "Unit vectors for every surface vertex, computed once per grid. The
+  surface is rebuilt every frame while the forecast plays, and deriving
+  sixteen thousand positions from trigonometry each time is most of that
+  frame's budget; scaling a stored unit vector by the radius is not."
+  [{:keys [nlat nlon lat0 dlat lon0 dlon] :as grid}]
+  (or (get @basis-cache grid)
+      (let [w (inc nlon)
+            out (js/Float32Array. (* 3 nlat w))]
+        (dotimes [i nlat]
+          (dotimes [jj w]
+            (let [lon (+ lon0 (* jj dlon))
+                  [x y z] (scene/lat-lon->globe (+ lat0 (* i dlat))
+                                                (if (> lon 180.0) (- lon 360.0) lon))
+                  o (* 3 (+ (* i w) jj))]
+              (aset out o x) (aset out (+ o 1) y) (aset out (+ o 2) z))))
+        (swap! basis-cache assoc grid out)
+        out)))
+
+(def ^:private lut-size 256)
+(def ^:private lut-cache (atom {}))
+
+(defn- lut
+  "The mode's ramp sampled at 256 points over its stops' span, as
+  `[lo hi Float32Array]`. Looked up per vertex instead of walking the
+  ramp's vectors sixteen thousand times a frame."
+  [mode]
+  (or (get @lut-cache mode)
+      (let [{:keys [stops]} (get colour-modes mode (:pressure colour-modes))
+            lo (ffirst stops) hi (first (peek stops))
+            a (js/Float32Array. (* 3 lut-size))]
+        (dotimes [k lut-size]
+          (let [[r g b] (ramp stops (+ lo (* (- hi lo) (/ k (dec lut-size)))))]
+            (aset a (* 3 k) r) (aset a (+ 1 (* 3 k)) g) (aset a (+ 2 (* 3 k)) b)))
+        (let [v [lo hi a]] (swap! lut-cache assoc mode v) v))))
+
+(defn shell-vertices!
+  "Fill `out` (Float32Array, 7 floats per vertex) with the pressure surface:
+  position from pressure, colour from `mode`'s field, alpha `alpha`.
+
+  A missing pressure puts the vertex on the floor and makes it
+  transparent, so a hole reads as a hole."
+  [^js out {:keys [nlat nlon] :as grid} fields mode exaggeration alpha]
+  (let [^js p (get fields "prmsl")
+        {:keys [field to-display]} (get colour-modes mode (:pressure colour-modes))
+        ^js c (get fields field)
+        ^js basis (shell-basis grid)
+        [lo hi ^js tab] (lut mode)
+        span (- hi lo)
+        w (inc nlon)
+        rkm (/ 1.0 scene/earth-radius-km)]
+    (dotimes [i nlat]
+      (dotimes [jj w]
+        (let [j (if (= jj nlon) 0 jj)
+              k (+ (* i nlon) j)
+              v (+ (* i w) jj)
+              pv (aget p k)
+              hole? (js/isNaN pv)
+              r (+ 1.0 (* rkm (if hole? floor-km (pressure->alt-km pv exaggeration))))
+              cv (if c (aget c k) js/NaN)
+              blank? (js/isNaN cv)
+              li (if blank? 0 (-> (/ (- (to-display cv) lo) span) (max 0.0) (min 1.0)
+                                  (* (dec lut-size)) Math/round))
+              o (* shell-stride v)
+              b (* 3 v)]
+          (aset out o (* r (aget basis b)))
+          (aset out (+ o 1) (* r (aget basis (+ b 1))))
+          (aset out (+ o 2) (* r (aget basis (+ b 2))))
+          (aset out (+ o 3) (if blank? 0.5 (aget tab (* 3 li))))
+          (aset out (+ o 4) (if blank? 0.5 (aget tab (+ 1 (* 3 li)))))
+          (aset out (+ o 5) (if blank? 0.5 (aget tab (+ 2 (* 3 li)))))
+          (aset out (+ o 6) (if (or hole? blank?) 0.0 alpha)))))
+    out))
+
+;; ---------------------------------------------------------------- isobars
+
+(defn isobar-levels
+  "Every `step` hPa across the field's range. 4 hPa is the Japan
+  Meteorological Agency's chart interval, and every fifth line (20 hPa)
+  is drawn heavier, as on its charts."
+  [^js p step]
+  (let [n (.-length p)
+        [lo hi] (loop [k 0 lo js/Infinity hi (- js/Infinity)]
+                  (if (= k n) [lo hi]
+                      (let [x (aget p k)]
+                        (if (js/isNaN x) (recur (inc k) lo hi)
+                            (recur (inc k) (min lo x) (max hi x))))))]
+    (if (> lo hi)
+      []
+      (let [a (* step (Math/ceil (/ (/ lo 100.0) step)))
+            b (* step (Math/floor (/ (/ hi 100.0) step)))]
+        (vec (range a (+ b 0.001) step))))))
+
+(defn- push-seg! [^js out [y1 x1] [y2 x2] v]
+  (.push out y1 x1 y2 x2 v))
+
+(defn isobar-segments
+  "Marching squares over the pressure grid. Returns a JS array of
+  `[lat1 lon1 lat2 lon2 level-hPa]` numbers, flattened (5 per segment).
+
+  Ambiguous saddles (both diagonals the same side) are split by the cell
+  centre's value, the standard disambiguation; picking one pairing
+  unconditionally draws isobars that cross at every col between a high
+  and a low, which is exactly where a reader is looking."
+  [{:keys [nlat nlon lat0 dlat lon0 dlon]} ^js p step]
+  (let [out (array)
+        levels (isobar-levels p step)]
+    (when (seq levels)
+      (let [lv (to-array levels)
+            nl (alength lv)
+            l0 (aget lv 0)]
+        (dotimes [i (dec nlat)]
+          (dotimes [j nlon]
+            (let [j1 (if (= (inc j) nlon) 0 (inc j))
+                  r0 (* i nlon) r1 (* (inc i) nlon)
+                  ;; corners in hPa: a (i,j) b (i,j+1) c (i+1,j+1) d (i+1,j)
+                  a (/ (aget p (+ r0 j)) 100.0) b (/ (aget p (+ r0 j1)) 100.0)
+                  c (/ (aget p (+ r1 j1)) 100.0) d (/ (aget p (+ r1 j)) 100.0)]
+              (when-not (or (js/isNaN a) (js/isNaN b) (js/isNaN c) (js/isNaN d))
+                (let [lo (min a b c d) hi (max a b c d)
+                      la (+ lat0 (* i dlat)) lb (+ la dlat)
+                      oa (+ lon0 (* j dlon)) ob (+ oa dlon)
+                      start (max 0 (int (Math/ceil (/ (- lo l0) step))))]
+                  (loop [li start]
+                    (when (< li nl)
+                      (let [v (aget lv li)]
+                        (when (<= v hi)
+                          (let [;; edge crossings: top (a-b), right (b-c), bottom (d-c), left (a-d)
+                                t (fn [x y] (/ (- v x) (- y x)))
+                                top (when (not= (< a v) (< b v)) [la (+ oa (* dlon (t a b)))])
+                                right (when (not= (< b v) (< c v)) [(+ la (* dlat (t b c))) ob])
+                                bottom (when (not= (< d v) (< c v)) [lb (+ oa (* dlon (t d c)))])
+                                left (when (not= (< a v) (< d v)) [(+ la (* dlat (t a d))) oa])
+                                pts (filterv some? [top right bottom left])]
+                            (case (count pts)
+                              2 (push-seg! out (nth pts 0) (nth pts 1) v)
+                              4 (let [centre (/ (+ a b c d) 4.0)]
+                                  (if (= (< centre v) (< a v))
+                                    (do (push-seg! out top right v) (push-seg! out bottom left v))
+                                    (do (push-seg! out top left v) (push-seg! out bottom right v))))
+                              nil)
+                            (recur (inc li))))))))))))))
+    out))
+
+;; ---------------------------------------------------------------- extrema
+
+(defn extrema
+  "Centres of lows and highs: grid points that are the minimum (maximum)
+  of their `radius`-cell neighbourhood and below 1008 hPa (above
+  1020 hPa). Returns `[{:kind :low|:high :lat :lon :hpa}]`, strongest
+  first, at most `limit`.
+
+  The thresholds keep the flat subtropics from sprouting a label on every
+  0.1 hPa wobble; they are a legibility choice, not a meteorological
+  definition, and are named here rather than buried."
+  [{:keys [nlat nlon lat0 dlat lon0 dlon]} ^js p radius limit]
+  (let [found (array)]
+    (doseq [i (range radius (- nlat radius)) j (range nlon)]
+      (let [v (aget p (+ (* i nlon) j))]
+        (when-not (js/isNaN v)
+          (let [hpa (/ v 100.0)
+                cmp (cond (< hpa 1008.0) < (> hpa 1020.0) > :else nil)]
+            (when cmp
+              (when (every? (fn [[di dj]]
+                              (let [jj (mod (+ j dj) nlon)
+                                    w (aget p (+ (* (+ i di) nlon) jj))]
+                                (or (and (zero? di) (zero? dj))
+                                    (js/isNaN w)
+                                    (cmp v w)
+                                    ;; plateau: keep the first in scan order
+                                    (and (= v w) (or (pos? di) (and (zero? di) (pos? dj)))))))
+                            (for [di (range (- radius) (inc radius))
+                                  dj (range (- radius) (inc radius))] [di dj]))
+                (let [lon (+ lon0 (* j dlon))]
+                  (.push found {:kind (if (= cmp <) :low :high)
+                                :lat (+ lat0 (* i dlat))
+                                :lon (if (> lon 180.0) (- lon 360.0) lon)
+                                :hpa hpa}))))))))
+    (->> (array-seq found)
+         (sort-by (fn [{:keys [hpa]}] (- (Math/abs (- hpa 1013.25)))))
+         (take limit)
+         vec)))
+
+;; ---------------------------------------------------------------- particles
+
+(defn- xyz! [^js hist o lat lon]
+  (let [[x y z] (scene/lat-lon->globe lat lon particle-alt-km)]
+    (aset hist o x) (aset hist (+ o 1) y) (aset hist (+ o 2) z)))
+
+(defn- fill-trail! [{:keys [trail ^js hist]} k lat lon]
+  (xyz! hist (* 3 k trail) lat lon)
+  (let [o (* 3 k trail)]
+    (dotimes [h (dec trail)]
+      (.copyWithin hist (+ o (* 3 (inc h))) o (+ o 3)))))
+
+(defn- random-place [rand]
+  ;; Uniform on the sphere, not in lat/lon: uniform latitude piles
+  ;; particles onto the poles, where a degree of longitude is nothing.
+  [(/ (* 180.0 (Math/asin (- (* 2.0 (rand)) 1.0))) Math/PI)
+   (- (* 360.0 (rand)) 180.0)])
+
+(defn make-particles
+  "`n` tracers with a `trail` of remembered positions each (as scene xyz,
+  so drawing a trail is copying floats, not trigonometry). `rand` is
+  passed in so a test can seed it."
+  [n trail rand]
+  (let [ps {:n n :trail trail :head 0
+            :lat (js/Float32Array. n) :lon (js/Float32Array. n)
+            :age (js/Float32Array. n) :life (js/Float32Array. n)
+            :hist (js/Float32Array. (* 3 n trail))}]
+    (dotimes [k n]
+      (let [[la lo] (random-place rand)]
+        (aset (:lat ps) k la) (aset (:lon ps) k lo)
+        (aset (:age ps) k (* (rand) 40.0))
+        (aset (:life ps) k (+ 40.0 (* 80.0 (rand))))
+        (fill-trail! ps k la lo)))
+    ps))
+
+(defn place!
+  "Put particle `k` at a place, with no trail behind it."
+  [ps k lat lon]
+  (aset (:lat ps) k lat) (aset (:lon ps) k lon)
+  (fill-trail! ps k lat lon))
+
+(defn- respawn! [{:keys [lat lon age life] :as ps} k rand]
+  (let [[la lo] (random-place rand)]
+    (aset lat k la) (aset lon k lo) (aset age k 0.0)
+    (aset life k (+ 40.0 (* 80.0 (rand))))
+    (fill-trail! ps k la lo)))
+
+(defn advect!
+  "Move every particle `dt-s` seconds of simulated time through the wind.
+
+  Explicit Euler on the sphere. At the step sizes the page uses (under an
+  hour of simulated time per frame, ~0.3 degrees for a 25 m/s jet) Euler's
+  error is far below the 2-degree grid's; midpoint would double the
+  sampling cost to refine a trajectory past what the field can say.
+
+  A particle past 84 degrees is respawned rather than advected: `cos lat`
+  goes to zero there, `dlon` blows up, and a particle orbiting the pole
+  once per frame is a numerical artefact, not a wind."
+  [{:keys [n lat lon age life] :as ps} grid ^js u ^js v dt-s rand]
+  (let [k-deg (/ 180.0 Math/PI earth-radius-m)]
+    (dotimes [k n]
+      (let [la (aget lat k) lo (aget lon k)
+            uu (sample grid u la lo)
+            vv (sample grid v la lo)
+            a (inc (aget age k))]
+        (if (or (js/isNaN uu) (js/isNaN vv) (> a (aget life k)))
+          (respawn! ps k rand)
+          (let [nla (+ la (* vv dt-s k-deg))
+                nlo (+ lo (/ (* uu dt-s k-deg) (Math/cos (* la scene/deg->rad))))
+                nlo (cond (> nlo 180.0) (- nlo 360.0) (< nlo -180.0) (+ nlo 360.0) :else nlo)]
+            (if (> (Math/abs nla) 84.0)
+              (respawn! ps k rand)
+              (do (aset lat k nla) (aset lon k nlo) (aset age k a)))))))
+    ps))
+
+(defn record-trail!
+  "Push every particle's position onto its trail. Returns the new state."
+  [{:keys [n trail lat lon hist] :as ps}]
+  (let [head (mod (inc (:head ps)) trail)]
+    (dotimes [k n]
+      (xyz! hist (* 3 (+ (* k trail) head)) (aget lat k) (aget lon k)))
+    (assoc ps :head head)))
+
+(defn- speed-colour [s]
+  (ramp [[0.0 0.55 0.75 1.0] [8.0 0.85 0.95 1.0] [16.0 1.0 0.9 0.4] [28.0 1.0 0.35 0.55]] s))
+
+(def line-stride 7)
+
+(def ^:private max-chord
+  "A trail segment longer than this (about 20 degrees of arc) is a respawn
+  seen from the old position, not a motion, and is not drawn."
+  0.35)
+
+(defn particle-lines!
+  "Write each particle's trail as line segments into `out`, oldest faint,
+  newest bright, coloured by the wind speed at its head. Returns the
+  number of VERTICES written from `offset` (floats = 7x that)."
+  [^js out offset {:keys [n trail ^js hist head lat lon]} grid ^js u ^js v]
+  (loop [k 0 w offset]
+    (if (= k n)
+      (- w offset)
+      (let [uu (sample grid u (aget lat k) (aget lon k))
+            vv (sample grid v (aget lat k) (aget lon k))
+            s (Math/sqrt (+ (* uu uu) (* vv vv)))
+            [r g b] (speed-colour (if (js/isNaN s) 0.0 s))
+            base (* 3 k trail)
+            w (loop [h 1 w w]
+                (if (= h trail)
+                  w
+                  (let [o1 (+ base (* 3 (mod (+ head (- trail (dec h))) trail)))   ; newer
+                        o0 (+ base (* 3 (mod (+ head (- trail h)) trail)))         ; older
+                        dx (- (aget hist o1) (aget hist o0))
+                        dy (- (aget hist (+ o1 1)) (aget hist (+ o0 1)))
+                        dz (- (aget hist (+ o1 2)) (aget hist (+ o0 2)))
+                        d2 (+ (* dx dx) (* dy dy) (* dz dz))]
+                    (if (or (zero? d2) (> d2 (* max-chord max-chord)))
+                      (recur (inc h) w)
+                      (let [a1 (* 0.9 (- 1.0 (/ (dec h) trail)))
+                            a0 (* 0.9 (- 1.0 (/ h trail)))
+                            o (* line-stride w)]
+                        (aset out o (aget hist o1)) (aset out (+ o 1) (aget hist (+ o1 1)))
+                        (aset out (+ o 2) (aget hist (+ o1 2)))
+                        (aset out (+ o 3) r) (aset out (+ o 4) g) (aset out (+ o 5) b) (aset out (+ o 6) a1)
+                        (aset out (+ o 7) (aget hist o0)) (aset out (+ o 8) (aget hist (+ o0 1)))
+                        (aset out (+ o 9) (aget hist (+ o0 2)))
+                        (aset out (+ o 10) r) (aset out (+ o 11) g) (aset out (+ o 12) b) (aset out (+ o 13) a0)
+                        (recur (inc h) (+ w 2)))))))]
+        (recur (inc k) w)))))
+
+(defn particle-hours-per-second
+  "How fast the particles' clock runs: 16 simulated hours per real second
+  per earth radius of camera altitude, floored at one hour.
+
+  This is NOT the forecast's clock. The fields advance at the reader's
+  chosen rate; the particles trace the wind of the instant on screen, and
+  at the forecast's rate a 10 m/s wind moves one pixel a second from
+  orbit. Faster particles, same wind: the paths are the true streamlines
+  of that instant, and the page states the rate."
+  [camera]
+  (max 1.0 (* 16.0 (- (:distance camera 3.0) 1.0))))
+
+;; ---------------------------------------------------------------- rain
+
+(def rain-km-per-mmh
+  "A column's height per mm/h of precipitation rate. 10 mm/h -- a heavy
+  shower -- stands 250 km tall, under the pressure surface's floor."
+  25.0)
+
+(defn rain-lines!
+  "One vertical segment per grid cell raining at least `min-mmh`, from the
+  ground to `rain-km-per-mmh` x the rate (capped at 40 mm/h). Returns
+  vertices written."
+  [^js out offset {:keys [nlat nlon lat0 dlat lon0 dlon]} ^js prate min-mmh]
+  (loop [k 0 w offset]
+    (if (= k (* nlat nlon))
+      (- w offset)
+      (let [r (aget prate k)]
+        (if (or (js/isNaN r) (< r min-mmh))
+          (recur (inc k) w)
+          (let [i (quot k nlon) j (rem k nlon)
+                lat (+ lat0 (* i dlat))
+                lon (let [x (+ lon0 (* j dlon))] (if (> x 180.0) (- x 360.0) x))
+                h (* rain-km-per-mmh (min 40.0 r))
+                a (min 0.95 (+ 0.35 (* 0.06 r)))
+                [x0 y0 z0] (scene/lat-lon->globe lat lon 1.0)
+                [x1 y1 z1] (scene/lat-lon->globe lat lon h)
+                o (* line-stride w)]
+            (aset out o x0) (aset out (+ o 1) y0) (aset out (+ o 2) z0)
+            (aset out (+ o 3) 0.35) (aset out (+ o 4) 0.65) (aset out (+ o 5) 1.0) (aset out (+ o 6) a)
+            (aset out (+ o 7) x1) (aset out (+ o 8) y1) (aset out (+ o 9) z1)
+            (aset out (+ o 10) 0.75) (aset out (+ o 11) 0.9) (aset out (+ o 12) 1.0) (aset out (+ o 13) (* 0.3 a))
+            (recur (inc k) (+ w 2))))))))
+
+(defn isobar-lines!
+  "Isobar segments lifted onto the pressure surface (plus 3 km, so they
+  sit on it rather than inside it). Heavier every 20 hPa."
+  [^js out offset ^js segs exaggeration]
+  (let [n (quot (.-length segs) 5)]
+    (loop [s 0 w offset]
+      (if (= s n)
+        (- w offset)
+        (let [b (* 5 s)
+              la1 (aget segs b) lo1 (aget segs (+ b 1))
+              la2 (aget segs (+ b 2)) lo2 (aget segs (+ b 3))
+              level (aget segs (+ b 4))
+              alt (+ 3.0 (pressure->alt-km (* 100.0 level) exaggeration))
+              wrap (fn [x] (if (> x 180.0) (- x 360.0) x))
+              [x1 y1 z1] (scene/lat-lon->globe la1 (wrap lo1) alt)
+              [x2 y2 z2] (scene/lat-lon->globe la2 (wrap lo2) alt)
+              heavy? (zero? (mod (Math/round level) 20))
+              a (if heavy? 0.8 0.3)
+              c (if heavy? 1.0 0.92)
+              o (* line-stride w)]
+          (aset out o x1) (aset out (+ o 1) y1) (aset out (+ o 2) z1)
+          (aset out (+ o 3) c) (aset out (+ o 4) c) (aset out (+ o 5) c) (aset out (+ o 6) a)
+          (aset out (+ o 7) x2) (aset out (+ o 8) y2) (aset out (+ o 9) z2)
+          (aset out (+ o 10) c) (aset out (+ o 11) c) (aset out (+ o 12) c) (aset out (+ o 13) a)
+          (recur (inc s) (+ w 2)))))))
+
+;; ---------------------------------------------------------------- readout
+
+(defn readout
+  "What the fields say at one place, for the plaque: hPa, °C, m/s and
+  direction the wind blows FROM (the meteorological convention), %, mm/h."
+  [grid fields lat lon]
+  (let [s (fn [id] (some-> (get fields id) (#(sample grid % lat lon))))
+        u (s "u10") v (s "v10")]
+    {:hpa (some-> (s "prmsl") (/ 100.0))
+     :celsius (some-> (s "t2m") (- 273.15))
+     :wind-ms (when (and u v) (Math/sqrt (+ (* u u) (* v v))))
+     :wind-from-deg (when (and u v)
+                      (let [d (/ (* 180.0 (Math/atan2 (- u) (- v))) Math/PI)]
+                        (if (neg? d) (+ d 360.0) d)))
+     :rh (s "rh2m")
+     :mmh (s "prate")}))

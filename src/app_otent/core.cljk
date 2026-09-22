@@ -23,7 +23,8 @@
             [app-otent.views :as views]
             [app-otent.route :as route]
             [app-otent.globe.renderer :as renderer]
-            [app-otent.globe.scene :as scene]))
+            [app-otent.globe.scene :as scene]
+            [app-otent.weather :as wx]))
 
 (defonce ^{:doc "The GPU side, kept out of the re-frame db: a device, a
   texture cache and a set of buffers are not values, and putting them in
@@ -32,6 +33,16 @@
              :buildings-key nil :buildings-loading? false}))
 
 (defonce root (atom nil))
+
+(defonce ^{:doc "The weather view's arrays: decoded frames, the interpolated
+  fields, the particles and the scratch vertex buffers. Beside `gpu` and
+  out of app-db for the same reason -- typed arrays are not values."}
+  wx-state (atom {:run nil :frames {} :cur nil :particles nil
+                  :scratch nil :key nil :indices-for nil :rain-n 0
+                  :extrema [] :last-ts nil :shown? false}))
+
+(def ^:private particle-count 4000)
+(def ^:private particle-trail 12)
 
 (declare start-globe!)
 
@@ -76,7 +87,12 @@
   (-> (js/fetch (str "/api/basemap/blue-marble/" (:z coord) "/" (:x coord) "/" (:y coord) ".jpg"))
       (.then (fn [r] (when (.-ok r) (.blob r))))
       (.then (fn [b] (when b (js/createImageBitmap b))))
-      (.then (fn [img] (when img (renderer/ensure-tile! state coord img 8))))
+      ;; 32 segments for the coarsest two zooms, 8 above. At z0 one tile is
+      ;; the whole planet, and 8 segments across it draw a visible polygon
+      ;; for a limb -- plain under a raster alone, glaring once the
+      ;; translucent weather shell curves smoothly around it.
+      (.then (fn [img] (when img (renderer/ensure-tile! state coord img
+                                                        (if (< (:z coord) 2) 32 8)))))
       (.catch (fn [_] nil))))
 
 (defn- sync-tiles!
@@ -153,6 +169,163 @@
             (.catch (fn [_] (swap! gpu assoc :buildings-loading? false
                                    :buildings-key nil))))))))
 
+(defn- rf-random [] (js/Math.random))
+
+(defn- weather-key-path [key]
+  ;; manifest keys are bucket paths; the Worker serves them under /api/weather/
+  (subs key (count "otent/weather/")))
+
+(defn- load-weather-frames!
+  "Fetch and decode every frame of the manifest's run, nearest to the
+  clock first, two at a time. Each arrival is reported to app-db so the
+  clock -- which holds rather than interpolating through a frame it does
+  not have -- can move."
+  [manifest t]
+  (let [run (:run manifest)
+        frames (vec (:frames manifest))
+        ts (wx/frame-times frames)
+        order (vec (sort-by #(Math/abs (- (nth ts %) t)) (range (count frames))))
+        queue (atom order)
+        lane (fn lane []
+               (when-let [i (first @queue)]
+                 (swap! queue rest)
+                 (-> (js/fetch (str "/api/weather/" (weather-key-path (:key (nth frames i)))))
+                     (.then (fn [r] (if (.-ok r) (.arrayBuffer r) (throw (js/Error. (str "HTTP " (.-status r)))))))
+                     (.then (fn [buf]
+                              (when (= run (:run @wx-state))
+                                (let [f (wx/decode-frame buf manifest)]
+                                  (if (:refused f)
+                                    (diag! :wxRefused (str i ":" (name (:refused f))))
+                                    (do (swap! wx-state assoc-in [:frames i] (:fields f))
+                                        (rf/dispatch [::events/weather-frame-loaded i])))))))
+                     (.catch (fn [e] (diag! :wxError (str i ": " (.-message e)))))
+                     (.then lane))))]
+    (swap! wx-state assoc :run run :frames {} :cur nil :key nil)
+    (lane) (lane)))
+
+(defn- scratch!
+  "Vertex arrays sized for the worst case, allocated once per grid."
+  [{:keys [nlat nlon] :as grid}]
+  (or (:scratch @wx-state)
+      (let [cells (* nlat nlon)
+            s {:shell (js/Float32Array. (* wx/shell-stride nlat (inc nlon)))
+               :indices (wx/shell-indices grid)
+               ;; rain: one segment per cell; particles: (trail-1) per particle
+               :under (js/Float32Array. (* wx/line-stride 2 (+ cells (* particle-count particle-trail))))
+               ;; isobars: generously, four segments per cell
+               :over (js/Float32Array. (* wx/line-stride 2 4 cells))}]
+        (swap! wx-state assoc :scratch s)
+        s)))
+
+(defn- ensure-cur! [fields-a]
+  (or (:cur @wx-state)
+      (let [c (into {} (map (fn [[id a]] [id (js/Float32Array. (.-length a))])) fields-a)]
+        (swap! wx-state assoc :cur c)
+        c)))
+
+(def ^:private low-colour "rgb(255,110,110)")
+(def ^:private high-colour "rgb(120,170,255)")
+
+(defn- place-labels!
+  "Position the 低/高 labels over their centres, hiding those behind the
+  planet. A small pool of spans, reused; textContent is touched only when
+  it changes."
+  [state camera aspect exaggeration]
+  (when-let [layer (.getElementById js/document "otent-wx-labels")]
+    (let [{:keys [eye view-proj]} (scene/orbit-camera (assoc camera :aspect aspect))
+          canvas (:canvas state)
+          cw (.-clientWidth canvas) ch (.-clientHeight canvas)
+          ex (:extrema @wx-state)]
+      (while (< (.-childElementCount layer) (count ex))
+        (let [el (.createElement js/document "span")]
+          (set! (.-className el) "otent-wx-label")
+          (.appendChild layer el)))
+      (dotimes [k (.-childElementCount layer)]
+        (let [el (aget (.-children layer) k)]
+          (if-let [{:keys [kind lat lon hpa]} (get ex k)]
+            (let [alt (+ 20.0 (wx/pressure->alt-km (* 100.0 hpa) exaggeration))
+                  [nx ny vis?] (scene/project view-proj eye (scene/lat-lon->globe lat lon alt))
+                  txt (str (if (= kind :low) "低" "高") " " (Math/round hpa))]
+              (if-not vis?
+                (set! (.. el -style -display) "none")
+                (do (set! (.. el -style -display) "block")
+                    (set! (.. el -style -left) (str (* cw (/ (inc nx) 2.0)) "px"))
+                    (set! (.. el -style -top) (str (* ch (/ (- 1.0 ny) 2.0)) "px"))
+                    (set! (.. el -style -color) (if (= kind :low) low-colour high-colour))
+                    (when (not= txt (.-textContent el)) (set! (.-textContent el) txt)))))
+            (set! (.. el -style -display) "none")))))))
+
+(defn- clear-weather! [state]
+  (when (:shown? @wx-state)
+    (renderer/set-wx-mesh! state nil 0 nil)
+    (renderer/set-wx-lines! state :under nil 0)
+    (renderer/set-wx-lines! state :over nil 0)
+    (when-let [layer (.getElementById js/document "otent-wx-labels")]
+      (set! (.-innerHTML layer) ""))
+    (swap! wx-state assoc :shown? false :key nil)))
+
+(defn- weather-frame!
+  "One frame of the weather view: advance the clock, interpolate the two
+  frames around it, rebuild what changed, move the particles, upload."
+  [state d camera aspect ts]
+  (let [dt (min 100.0 (if-let [l (:last-ts @wx-state)] (- ts l) 16.0))
+        _ (swap! wx-state assoc :last-ts ts)
+        _ (rf/dispatch-sync [::events/weather-advance dt])
+        d @rf-db/app-db
+        {:keys [manifest t mode exaggeration show]} (:weather d)
+        grid (:grid manifest)]
+    (when (and manifest (not= (:run manifest) (:run @wx-state)))
+      (load-weather-frames! manifest (or t (js/Date.now))))
+    (when (and grid t)
+      (let [times (wx/frame-times (:frames manifest))
+            [i j w] (wx/bracket times t)
+            fa (get-in @wx-state [:frames i])
+            fb (get-in @wx-state [:frames j])]
+        (when (and fa fb)
+          (let [{:keys [shell indices under over]} (scratch! grid)
+                cur (ensure-cur! fa)
+                ;; w quantised to 1/50 of a step: the surface, isobars and
+                ;; rain are rebuilt when the picture could visibly change,
+                ;; not sixty times a second for a sub-pixel difference.
+                k [i j (Math/round (* 50 w)) mode exaggeration (:isobars show) (:rain show)
+                   (identical? state (:indices-for @wx-state))]]
+            (when (not= k (:key @wx-state))
+              (doseq [[id a] fa] (wx/lerp-into! (get cur id) a (get fb id) w))
+              (wx/shell-vertices! shell grid cur mode exaggeration 0.42)
+              (let [fresh? (not (identical? state (:indices-for @wx-state)))]
+                (renderer/set-wx-mesh! state shell (* (:nlat grid) (inc (:nlon grid)))
+                                       (when fresh? indices))
+                (swap! wx-state assoc :indices-for state))
+              (renderer/set-wx-lines!
+               state :over over
+               (if (:isobars show)
+                 (wx/isobar-lines! over 0 (wx/isobar-segments grid (get cur "prmsl") 4.0) exaggeration)
+                 0))
+              (swap! wx-state assoc
+                     :rain-n (if (:rain show) (wx/rain-lines! under 0 grid (get cur "prate") 0.5) 0)
+                     :extrema (wx/extrema grid (get cur "prmsl") 3 24)
+                     :key k :shown? true))
+            ;; Particles every frame, whether or not the forecast plays: they
+            ;; trace the wind of the instant on screen. Their clock scales with
+            ;; the camera's height so they cross the screen at a readable
+            ;; pace -- about 16 simulated hours per real second per earth
+            ;; radius of altitude -- and the rate is stated on the page.
+            (let [ps (or (:particles @wx-state)
+                         (let [p (wx/make-particles particle-count particle-trail rf-random)]
+                           (swap! wx-state assoc :particles p) p))
+                  pdt (* (/ dt 1000.0) (wx/particle-hours-per-second camera) 3600.0)
+                  _ (wx/advect! ps grid (get cur "u10") (get cur "v10") pdt rf-random)
+                  ps (wx/record-trail! ps)
+                  _ (swap! wx-state assoc :particles ps)
+                  rain-n (:rain-n @wx-state)
+                  pn (if (:wind show)
+                       (wx/particle-lines! under rain-n ps grid (get cur "u10") (get cur "v10"))
+                       0)]
+              (renderer/set-wx-lines! state :under under (+ rain-n pn))
+              (diag! :wxParticles pn))
+            (place-labels! state camera aspect exaggeration)
+            (diag! :wxFrame (str i "/" j))))))))
+
 (defn- frame!
   "One frame.
 
@@ -167,7 +340,7 @@
 
   Reading the atom and applying the same pure functions is also simply
   what this loop wants: `db/visible-objects` is a function of a map."
-  [_ts]
+  [ts]
   (diag! :frames (inc (or (some-> (aget js/window "__otent") (aget "frames")) 0)))
   (let [{:keys [state]} @gpu]
     ;; If the node we hold is no longer the node in the page, rebuild on the
@@ -192,12 +365,31 @@
           (sync-tiles! state camera max-zoom)
           (sync-buildings! state camera (get-in d [:buildings :areas]))
           (load-vector-lines! state)
-          (renderer/set-markers! state (scene/marker-vertices objects))
+          (if (= :weather (:view d))
+            (do (renderer/set-markers! state [])
+                (weather-frame! state d camera aspect ts))
+            (do (clear-weather! state)
+                (renderer/set-markers! state (scene/marker-vertices objects))))
           (renderer/draw! state
                           {:view-proj (:view-proj (scene/orbit-camera
                                                    (assoc camera :aspect aspect)))
                            :dpr dpr})))))
   (js/requestAnimationFrame frame!))
+
+(defn- probe!
+  "The weather under the pointer, read off the interpolated fields."
+  [canvas e]
+  (let [d @rf-db/app-db]
+    (when-let [cur (and (= :weather (:view d)) (:cur @wx-state))]
+      (let [r (.getBoundingClientRect canvas)
+            nx (- (* 2.0 (/ (- (.-clientX e) (.-left r)) (.-width r))) 1.0)
+            ny (- 1.0 (* 2.0 (/ (- (.-clientY e) (.-top r)) (.-height r))))
+            aspect (/ (.-width r) (max 1.0 (.-height r)))]
+        (if-let [{:keys [lat-deg lon-deg]} (scene/pick (assoc (:camera d) :aspect aspect) nx ny)]
+          (rf/dispatch [::events/weather-probe
+                        (assoc (wx/readout (get-in d [:weather :manifest :grid]) cur lat-deg lon-deg)
+                               :lat lat-deg :lon lon-deg)])
+          (rf/dispatch [::events/weather-probe nil]))))))
 
 (defn- attach-pointer! [canvas]
   (let [dragging (atom nil)]
@@ -208,9 +400,10 @@
     (.addEventListener canvas "pointercancel" (fn [_] (reset! dragging nil)))
     (.addEventListener canvas "pointermove"
                        (fn [e]
-                         (when-let [[x y] @dragging]
-                           (rf/dispatch [::events/drag (- (.-clientX e) x) (- (.-clientY e) y)])
-                           (reset! dragging [(.-clientX e) (.-clientY e)]))))
+                         (if-let [[x y] @dragging]
+                           (do (rf/dispatch [::events/drag (- (.-clientX e) x) (- (.-clientY e) y)])
+                               (reset! dragging [(.-clientX e) (.-clientY e)]))
+                           (probe! canvas e))))
     (.addEventListener canvas "wheel"
                        (fn [e] (.preventDefault e)
                          (rf/dispatch [::events/zoom (.-deltaY e)]))
@@ -255,7 +448,17 @@
 
 (defn ui []
   [views/app (assoc @(rf/subscribe [::subs/page-model])
-                    :on-fly #(rf/dispatch [::events/fly-to %]))])
+                    :on-fly #(rf/dispatch [::events/fly-to %])
+                    :on-weather (fn [[k v]]
+                                  (rf/dispatch
+                                   (case k
+                                     :play [::events/weather-toggle-play]
+                                     :seek [::events/weather-seek v]
+                                     :speed [::events/weather-speed v]
+                                     :mode [::events/weather-mode v]
+                                     :exaggeration [::events/weather-exaggeration v]
+                                     :toggle [::events/weather-toggle v]
+                                     :tilt [::events/set-tilt v]))))])
 
 (defn- after-commit!
   "Run `f` once React has put its tree in the document.
@@ -282,4 +485,5 @@
   (rf/dispatch [::events/load-basemap])
   (rf/dispatch [::events/load-buildings])
   (rf/dispatch [::events/load-all])
+  (rf/dispatch [::events/load-weather])
   (mount!))

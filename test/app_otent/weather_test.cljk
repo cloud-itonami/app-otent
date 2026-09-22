@@ -1,0 +1,210 @@
+(ns app-otent.weather-test
+  "The simulation without a browser: decode, time, space, the surface, the
+  isobars, the extrema, and a particle carried by a known wind."
+  (:require [clojure.test :as t]
+            [app-otent.weather :as wx]
+            [app-otent.globe.scene :as scene]))
+
+;; A 10-degree grid: small enough to reason about, the same shape rules as
+;; the real 2-degree one (north row first, lon from 0, no duplicate 360).
+(def g {:nlat 19 :nlon 36 :lat0 90.0 :dlat -10.0 :lon0 0.0 :dlon 10.0})
+(def n (* 19 36))
+
+(defn- field [f]
+  (let [a (js/Float32Array. n)]
+    (dotimes [k n]
+      (let [i (quot k 36) j (rem k 36)]
+        (aset a k (f (+ 90.0 (* i -10.0)) (* j 10.0)))))
+    a))
+
+(defn- great-circle-deg [lat1 lon1 lat2 lon2]
+  (let [r scene/deg->rad
+        c (+ (* (Math/sin (* r lat1)) (Math/sin (* r lat2)))
+             (* (Math/cos (* r lat1)) (Math/cos (* r lat2)) (Math/cos (* r (- lon2 lon1)))))]
+    (/ (Math/acos (max -1.0 (min 1.0 c))) r)))
+
+(defn- low-at
+  "A low of `depth` hPa centred at lat/lon, over 1013 hPa."
+  [clat clon depth]
+  (field (fn [lat lon] (* 100.0 (- 1013.0 (* depth (Math/exp (- (/ (Math/pow (great-circle-deg lat lon clat clon) 2) 400.0)))))))))
+
+(def manifest
+  {:grid g
+   :vars [{:id "prmsl" :offset 100000.0 :scale 1.0}
+          {:id "u10" :offset 0.0 :scale 0.01}]})
+
+(defn- frame-bytes [nlat nlon]
+  (let [nn (* nlat nlon)
+        buf (js/ArrayBuffer. (+ 12 (* 2 nn 2)))
+        dv (js/DataView. buf)]
+    (doseq [[k ch] (map-indexed vector "OTWX")] (.setUint8 dv k (.charCodeAt ch 0)))
+    (.setUint16 dv 4 1 true) (.setUint16 dv 6 2 true)
+    (.setUint16 dv 8 nlat true) (.setUint16 dv 10 nlon true)
+    (dotimes [k nn]
+      (.setInt16 dv (+ 12 (* 2 k)) (if (= k 5) -32768 1325) true)
+      (.setInt16 dv (+ 12 (* 2 nn) (* 2 k)) -250 true))
+    buf))
+
+(t/deftest a-frame-decodes-and-a-wrong-shape-is-refused
+  (let [{:keys [fields]} (wx/decode-frame (frame-bytes 19 36) manifest)]
+    (t/is (= 101325.0 (aget (get fields "prmsl") 0)))
+    (t/is (js/isNaN (aget (get fields "prmsl") 5)) "the sentinel is a hole, not 67232 Pa")
+    (t/is (< (Math/abs (- -2.5 (aget (get fields "u10") 7))) 1e-6)))
+  (t/is (= :shape-mismatch (:refused (wx/decode-frame (frame-bytes 19 35) manifest))))
+  (let [b (frame-bytes 19 36)]
+    (.setUint8 (js/DataView. b) 0 0)
+    (t/is (= :bad-magic (:refused (wx/decode-frame b manifest))))))
+
+(t/deftest time-is-bracketed-and-never-extrapolated
+  (let [ts [0 100 200]]
+    (t/is (= [0 0 0.0] (wx/bracket ts -50)))
+    (t/is (= [2 2 0.0] (wx/bracket ts 999)) "past the horizon is the horizon")
+    (t/is (= [0 1 0.25] (wx/bracket ts 25)))
+    (t/is (= [1 2 0.0] (wx/bracket ts 100)))
+    (t/is (nil? (wx/bracket [] 5))))
+  (let [a (js/Float32Array. #js [0 10]) b (js/Float32Array. #js [10 30])
+        out (js/Float32Array. 2)]
+    (wx/lerp-into! out a b 0.5)
+    (t/is (= [5 20] (vec (array-seq out))))))
+
+(t/deftest space-wraps-in-longitude-and-keeps-holes
+  (let [f (field (fn [_ lon] lon))]
+    ;; between column 35 (350) and column 0 (0): the wrap, not a jump
+    ;; through every longitude on the way back
+    (t/is (< (Math/abs (- 175.0 (wx/sample g f 0.0 355.0))) 1e-4))
+    (t/is (< (Math/abs (- 20.0 (wx/sample g f 0.0 20.0))) 1e-4))
+    (t/is (< (Math/abs (- 20.0 (wx/sample g f 0.0 -340.0))) 1e-4) "negative longitude is the same place"))
+  (let [f (field (fn [lat lon] (if (and (= lat 0.0) (= lon 0.0)) js/NaN 1.0)))]
+    (t/is (js/isNaN (wx/sample g f 0.0 5.0)))
+    (t/is (= 1.0 (wx/sample g f 20.0 5.0)))))
+
+(t/deftest height-is-pressure-with-a-floor
+  (t/is (= wx/base-km (wx/pressure->alt-km wx/standard-pa 1.0)))
+  (t/is (> (wx/pressure->alt-km 103000.0 1.0) (wx/pressure->alt-km 101000.0 1.0)))
+  (t/is (= wx/floor-km (wx/pressure->alt-km 80000.0 1.0)) "a deep low bottoms out above the ground")
+  (t/is (> (wx/pressure->alt-km 99000.0 1.0) (wx/pressure->alt-km 99000.0 2.0))
+        "exaggeration deepens a low"))
+
+(t/deftest the-surface-closes-its-seam
+  (let [idx (wx/shell-indices g)
+        verts (* 19 37)]
+    (t/is (= (* 6 18 36) (.-length idx)))
+    (t/is (< (reduce max (array-seq idx)) verts))
+    (let [out (js/Float32Array. (* 7 verts))
+          p (low-at 30.0 140.0 30.0)]
+      (wx/shell-vertices! out g {"prmsl" p} :pressure 1.0 0.5)
+      ;; column 36 is column 0 again, at the same position
+      (doseq [i [3 9 15]]
+        (let [a (* 7 (* i 37)) b (* 7 (+ (* i 37) 36))]
+          (dotimes [c 3] (t/is (< (Math/abs (- (aget out (+ a c)) (aget out (+ b c)))) 1e-5)))))
+      ;; the low sits lower than its surroundings
+      (let [r (fn [i j] (let [o (* 7 (+ (* i 37) j))]
+                          (Math/sqrt (+ (Math/pow (aget out o) 2) (Math/pow (aget out (+ o 1)) 2)
+                                        (Math/pow (aget out (+ o 2)) 2)))))]
+        (t/is (< (r 6 14) (r 6 30)))))))
+
+(t/deftest isobars-lie-on-their-level
+  (let [p (low-at 30.0 140.0 30.0)
+        segs (wx/isobar-segments g p 4.0)
+        nseg (quot (.-length segs) 5)]
+    (t/is (pos? nseg))
+    (doseq [s (range nseg)
+            :let [b (* 5 s)
+                  level (aget segs (+ b 4))]
+            [la lo] [[(aget segs b) (aget segs (+ b 1))] [(aget segs (+ b 2)) (aget segs (+ b 3))]]]
+      ;; an endpoint is on a cell edge, where bilinear = linear: the field
+      ;; there must be the contour's level
+      (t/is (< (Math/abs (- level (/ (wx/sample g p la lo) 100.0))) 0.05)
+            (str "segment " s " at " la "," lo)))
+    (t/is (= [984.0 988.0 992.0 996.0 1000.0 1004.0 1008.0 1012.0]
+             (wx/isobar-levels p 4.0)))))
+
+(t/deftest the-low-is-found-where-it-was-put
+  (let [p (field (fn [lat lon]
+                   (* 100.0 (+ 1013.0
+                               (* -25.0 (Math/exp (- (/ (Math/pow (great-circle-deg lat lon 30.0 140.0) 2) 300.0))))
+                               (* 18.0 (Math/exp (- (/ (Math/pow (great-circle-deg lat lon 40.0 -150.0) 2) 300.0))))))))
+        found (wx/extrema g p 2 10)]
+    (t/is (= #{:low :high} (set (map :kind found))))
+    (t/is (some #(and (= :low (:kind %)) (= 30.0 (:lat %)) (= 140.0 (:lon %))) found))
+    (t/is (some #(and (= :high (:kind %)) (= 40.0 (:lat %)) (= -150.0 (:lon %))) found)
+          "a centre east of the antimeridian is reported in [-180, 180]")))
+
+(t/deftest a-particle-moves-at-the-speed-of-the-wind
+  (let [u (field (constantly 10.0)) v (field (constantly 0.0))
+        rnd (let [s (atom 0.37)] #(swap! s (fn [x] (mod (* x 9301.7) 1.0))))
+        ps (wx/make-particles 1 4 rnd)]
+    (wx/place! ps 0 0.0 100.0)
+    (aset (:life ps) 0 1000.0)
+    (wx/advect! ps g u v 3600.0 rnd)
+    ;; 10 m/s for an hour on the equator = 36 km = 0.3237 degrees
+    (t/is (< (Math/abs (- 100.3237 (aget (:lon ps) 0))) 1e-3))
+    (t/is (< (Math/abs (aget (:lat ps) 0)) 1e-9))
+    (t/testing "at 60N the same wind turns twice the longitude"
+      (aset (:lat ps) 0 60.0) (aset (:lon ps) 0 100.0)
+      (wx/advect! ps g u v 3600.0 rnd)
+      (t/is (< (Math/abs (- 100.6474 (aget (:lon ps) 0))) 2e-3)))
+    (t/testing "the antimeridian is crossed, not bounced off"
+      (aset (:lat ps) 0 0.0) (aset (:lon ps) 0 179.9)
+      (wx/advect! ps g u v 3600.0 rnd)
+      (t/is (< -180.0 (aget (:lon ps) 0) -179.7)))))
+
+(t/deftest trails-draw-only-real-motion
+  (let [u (field (constantly 20.0)) v (field (constantly 5.0))
+        rnd (let [s (atom 0.11)] #(swap! s (fn [x] (mod (+ 0.618 x) 1.0))))
+        ps (wx/make-particles 10 5 rnd)
+        out (js/Float32Array. (* 7 2 10 5))
+        _ (dotimes [k 10] (aset (:life ps) k 1000.0) (wx/place! ps k 10.0 (* 10.0 k)))]
+    (t/is (zero? (wx/particle-lines! out 0 ps g u v)) "a fresh particle has no trail")
+    (let [ps (reduce (fn [ps _] (wx/advect! ps g u v 3600.0 rnd) (wx/record-trail! ps)) ps (range 3))]
+      (t/is (= (* 10 2 3) (wx/particle-lines! out 0 ps g u v))
+            "three recorded steps are three segments per particle"))))
+
+(t/deftest rain-stands-where-it-rains
+  (let [pr (field (fn [lat lon] (if (and (= lat 30.0) (= lon 140.0)) 12.0 0.1)))
+        out (js/Float32Array. (* 7 2 n))]
+    (t/is (= 2 (wx/rain-lines! out 0 g pr 0.5)))
+    (let [top [(aget out 7) (aget out 8) (aget out 9)]
+          {:keys [lat-deg lon-deg alt-km]} (scene/globe->lat-lon top)]
+      (t/is (< (Math/abs (- 30.0 lat-deg)) 1e-3))
+      (t/is (< (Math/abs (- 140.0 lon-deg)) 1e-3))
+      (t/is (< (Math/abs (- (* 12.0 wx/rain-km-per-mmh) alt-km)) 0.5)))))
+
+(t/deftest the-readout-uses-the-meteorological-convention
+  (let [fields {"u10" (field (constantly 5.0)) "v10" (field (constantly 0.0))
+                "prmsl" (field (constantly 101000.0)) "t2m" (field (constantly 293.15))}
+        r (wx/readout g fields 35.0 139.0)]
+    (t/is (< (Math/abs (- 270.0 (:wind-from-deg r))) 1e-6) "an eastward wind blows FROM the west")
+    (t/is (< (Math/abs (- 1010.0 (:hpa r))) 1e-3))
+    (t/is (< (Math/abs (- 20.0 (:celsius r))) 1e-3))
+    (t/is (nil? (:rh r)) "a field that was not loaded is nil, not zero")))
+
+(t/deftest the-surface-faces-outward
+  ;; The renderers cull back faces. If the winding flipped, the whole
+  ;; surface would be culled from outside and the view would show nothing
+  ;; but particles -- with no error anywhere.
+  (let [idx (wx/shell-indices g)
+        out (js/Float32Array. (* 7 19 37))
+        _ (wx/shell-vertices! out g {"prmsl" (field (constantly 101325.0))} :pressure 1.0 0.5)
+        v (fn [k] [(aget out (* 7 k)) (aget out (+ 1 (* 7 k))) (aget out (+ 2 (* 7 k)))])]
+    ;; from row 1: row 0's northern edge is the pole, a single point, so its
+    ;; triangles are degenerate and have no facing to test
+    (doseq [tri (range 72 (- (quot (.-length idx) 3) 72) 97)]
+      (let [[a b c] (map #(v (aget idx (+ (* 3 tri) %))) [0 1 2])
+            e1 (map - b a) e2 (map - c a)
+            [nx ny nz] [(- (* (nth e1 1) (nth e2 2)) (* (nth e1 2) (nth e2 1)))
+                        (- (* (nth e1 2) (nth e2 0)) (* (nth e1 0) (nth e2 2)))
+                        (- (* (nth e1 0) (nth e2 1)) (* (nth e1 1) (nth e2 0)))]]
+        (t/is (pos? (+ (* nx (nth a 0)) (* ny (nth a 1)) (* nz (nth a 2))))
+              (str "triangle " tri " faces inward"))))))
+
+(t/deftest the-surface-colour-is-the-legend-colour
+  ;; the lookup table must agree with the ramp the legend is drawn from
+  (let [out (js/Float32Array. (* 7 19 37))
+        p (field (fn [lat _] (+ 97000.0 (* 50.0 (+ lat 90.0)))))]
+    (wx/shell-vertices! out g {"prmsl" p} :pressure 1.0 0.5)
+    (doseq [i [2 9 16]]
+      (let [o (* 7 (* i 37))
+            want (wx/colour-for :pressure (aget p (* i 36)))]
+        (dotimes [c 3]
+          (t/is (< (Math/abs (- (nth want c) (aget out (+ o 3 c)))) 0.02)))))))

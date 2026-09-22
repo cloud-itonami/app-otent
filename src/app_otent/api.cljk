@@ -275,3 +275,52 @@
                                            ;; Basemap objects are rewritten only
                                            ;; by a deliberate re-ingest.
                                            "cache-control" "public, max-age=86400"}})))))))
+
+;; ---------------------------------------------------------------- weather
+
+(defn weather-manifest
+  "`GET /api/weather` -- the latest GFS ingest's manifest.
+
+  503 with the reason when the ingest has never run, not an empty
+  forecast: no manifest means nobody fetched the weather, and the view
+  must say UNMEASURED rather than draw a calm planet."
+  [env]
+  (-> (.get (aget env "DATALAKE") "otent/weather/manifest.json")
+      (.then (fn [o]
+               (if (nil? o)
+                 (js/Response. (js/JSON.stringify
+                                #js {:error "no-weather-manifest"
+                                     :detail (str "otent/weather/manifest.json is not in the bucket "
+                                                  "-- run `bin/weather.cljk ingest` in cloud-itonami/otent")})
+                               #js {:status 503
+                                    :headers #js {"content-type" "application/json"}})
+                 (js/Response. (.-body o)
+                               #js {:headers #js {"content-type" "application/json"
+                                                  ;; A run lands every six hours; five
+                                                  ;; minutes stale is invisible at that
+                                                  ;; cadence and saves a bucket read per view.
+                                                  "cache-control" "public, max-age=300"}}))))))
+
+(def weather-frame-path
+  "What `/api/weather/<rest>` may name: a frame of one run, nothing else.
+  The binding reaches the whole bucket; this route must not."
+  #"^gfs/[0-9]{8}T[0-9]{4}Z/[0-9]{8}T[0-9]{2}\.bin$")
+
+(defn weather-object
+  "`GET /api/weather/gfs/<run>/<t>.bin` -- one packed frame, straight from R2.
+  Immutable: the run is in the key, and a run is never rewritten."
+  [env rest-path]
+  (if-not (re-matches weather-frame-path rest-path)
+    (js/Promise.resolve
+     (js/Response. (js/JSON.stringify #js {:error "not-a-weather-frame" :path rest-path})
+                   #js {:status 404 :headers #js {"content-type" "application/json"}}))
+    (let [key (str "otent/weather/" rest-path)]
+      (-> (.get (aget env "DATALAKE") key)
+          (.then (fn [o]
+                   (if (nil? o)
+                     (js/Response. (js/JSON.stringify #js {:error "not-ingested" :key key})
+                                   #js {:status 404
+                                        :headers #js {"content-type" "application/json"}})
+                     (js/Response. (.-body o)
+                                   #js {:headers #js {"content-type" "application/octet-stream"
+                                                      "cache-control" "public, max-age=31536000, immutable"}}))))))))

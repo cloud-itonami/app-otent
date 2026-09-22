@@ -171,3 +171,52 @@
              (assoc-in [:layers :satellite :stale-by-id] failed-by-id)
              (assoc-in [:layers :satellite :stale] (vec (vals failed-by-id)))))
        d))))
+
+;; ---------------------------------------------------------------- weather
+
+(rf/reg-event-fx
+ ::load-weather
+ (fn [{:keys [db]} _]
+   {:db (assoc-in db [:weather :status] :loading)
+    ::fetch-json {:url "/api/weather"
+                  :on-ok [::weather-manifest-loaded]
+                  :on-fail [::weather-failed]}}))
+
+(rf/reg-event-db
+ ::weather-manifest-loaded
+ (fn [d [_ m]]
+   (let [wx (assoc (:weather d) :status :loaded :manifest m :loaded #{})]
+     (assoc d :weather (assoc wx :t (db/weather-start-t wx (js/Date.now)))))))
+
+(rf/reg-event-db
+ ::weather-failed
+ (fn [d [_ {:keys [status body]}]]
+   ;; UNMEASURED, like every other layer: "the ingest has not run" is not
+   ;; "the atmosphere is calm", and the view says which.
+   (update d :weather assoc :status :unavailable
+           :detail (or (:detail body) (:error body) (str "HTTP " status)))))
+
+(rf/reg-event-db ::weather-frame-loaded
+                 (fn [d [_ i]] (update-in d [:weather :loaded] conj i)))
+
+(rf/reg-event-db ::weather-advance
+                 (fn [d [_ dt-ms]] (update d :weather db/advance-weather dt-ms)))
+
+(rf/reg-event-db ::weather-toggle-play
+                 (fn [d _] (update-in d [:weather :playing?] not)))
+
+(rf/reg-event-db
+ ::weather-seek
+ (fn [d [_ hours]]
+   (if-let [[a b] (db/weather-span (:weather d))]
+     (assoc-in d [:weather :t] (max a (min b (+ a (* hours 3600000.0)))))
+     d)))
+
+(rf/reg-event-db ::weather-speed (fn [d [_ v]] (assoc-in d [:weather :speed] v)))
+(rf/reg-event-db ::weather-mode (fn [d [_ v]] (assoc-in d [:weather :mode] v)))
+(rf/reg-event-db ::weather-exaggeration (fn [d [_ v]] (assoc-in d [:weather :exaggeration] v)))
+(rf/reg-event-db ::weather-toggle (fn [d [_ k]] (update-in d [:weather :show k] not)))
+(rf/reg-event-db ::weather-probe (fn [d [_ p]] (assoc-in d [:weather :probe] p)))
+
+(rf/reg-event-db ::set-tilt
+                 (fn [d [_ deg]] (assoc-in d [:camera :tilt-deg] deg)))

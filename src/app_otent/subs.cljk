@@ -13,12 +13,13 @@
 (rf/reg-sub ::layers db/layer-summary)
 (rf/reg-sub ::unavailable db/unavailable-kinds)
 (rf/reg-sub ::visible-objects db/visible-objects)
+(rf/reg-sub ::weather :-> :weather)
 
 (rf/reg-sub
  ::page-model
  :<- [::view] :<- [::backend] :<- [::layers] :<- [::unavailable] :<- [::now]
- :<- [::building-areas] :<- [::camera]
- (fn [[view backend layers unavailable now areas camera] _]
+ :<- [::building-areas] :<- [::camera] :<- [::weather]
+ (fn [[view backend layers unavailable now areas camera weather] _]
    {:view view :backend backend :layers layers
     :unavailable unavailable :now now
-    :building-areas areas :camera camera}))
+    :building-areas areas :camera camera :weather weather}))
