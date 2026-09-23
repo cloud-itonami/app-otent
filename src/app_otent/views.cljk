@@ -263,8 +263,15 @@
                                        :aria-pressed (str (= v speed))}}])]
          [:div {:class "otent-foot"}
           (str "frames " (count loaded) "/" (count frames)
+               " · yataverse " (db/weather-lake-count weather) "/" (count loaded) " (sha256 照合済み)"
                (when (seq (:refused manifest))
-                 (str " · refused " (count (:refused manifest)))))]])]
+                 (str " · refused " (count (:refused manifest)))))]
+         (when-let [cid (db/current-frame-cid weather)]
+           [:div {:class "otent-foot"}
+            "この時刻のコマ: "
+            [:a {:href (db/lake-url cid) :target "_blank" :rel "noopener"}
+             (str (subs cid 0 16) "…")]
+            " (yataverse.com)"])])]
      (when (= :loaded status)
        [:div {:class "otent-plaque"}
         [:div {:class "otent-wx-row"}
@@ -317,8 +324,8 @@
     [:strong "UNMEASURED"] " means the feed was never read -- not that it was empty."]
    [dds/table
     {:caption "Layers"
-     :headers ["kind" "status" "rows" "refused" "observed" "snapshot"]
-     :rows (for [{:keys [kind status count refused as-of snapshot-id detail]} layers]
+     :headers ["kind" "status" "rows" "refused" "observed" "snapshot" "yataverse"]
+     :rows (for [{:keys [kind status count refused as-of snapshot-id detail payloads]} layers]
              [(name kind)
               (if (= :unavailable status)
                 (dds/chip-label "UNMEASURED" {:color "red"})
@@ -327,7 +334,19 @@
               (if (pos? (or refused 0)) (str refused) "-")
               (if as-of (db/describe-age (- now as-of)) "-")
               (or (some-> snapshot-id (subs 0 (min 10 (clojure.core/count snapshot-id))))
-                  (or detail "-"))])}]])
+                  (or detail "-"))
+              ;; the payloads these rows were parsed from, fetchable by CID
+              (if-let [{:keys [cid]} (first payloads)]
+                [:span
+                 [:a {:href (db/lake-url cid) :target "_blank" :rel "noopener"}
+                  (str (subs cid 0 12) "…")]
+                 (when (> (clojure.core/count payloads) 1)
+                   (str " +" (dec (clojure.core/count payloads))))]
+                "-")])}]
+   [:p {:class "otent-foot"}
+    "yataverse 列は、その行が解析された元の payload の CID。"
+    [:code "https://{cid}.ipfs.yataverse.com/"]
+    " で誰でも取得でき、ゲートウェイがバイトを CID と照合する。"]])
 
 (defn sources-view [_]
   [dds/stack
@@ -362,6 +381,12 @@
              "ODbL 1.0 — © OpenStreetMap contributors"]
             ["ground" "OpenStreetMap water / landcover / park, from the same tiles"
              "ODbL 1.0 — © OpenStreetMap contributors"]]}]
+   [dds/heading 3 "yataverse.com lake"]
+   [:p "Every raw payload otent fetches, and every weather frame, is also a block in the "
+    [:a {:href "https://yataverse.com/" :target "_blank" :rel "noopener"} "yataverse.com"]
+    " data lake, addressed by the raw CIDv1 of its bytes -- the sha256 already on every row. "
+    "The weather view reads its frames from the lake first and checks their sha256 in the browser; "
+    "the object list links each layer to the payloads its rows came from."]
    [:p {:class "otent-foot"}
     "Every basemap layer is ingested once into our own bucket and served from it. "
     "Nothing on this page is fetched from a third party at render time."]

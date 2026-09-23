@@ -78,3 +78,13 @@
   (doseq [k db/kinds]
     (is (some? (db/layer db/default-db k)) (str k " has no layer"))
     (is (= :idle (:status (db/layer db/default-db k))))))
+
+(deftest the-page-counts-what-the-lake-actually-served
+  (let [wx {:manifest {:frames [{:t "2026-09-23T00:00:00Z" :cid "bafkA"}
+                                {:t "2026-09-23T06:00:00Z" :cid "bafkB"}]}
+            :sources {0 :lake 1 :worker}
+            :t (.getTime (js/Date. "2026-09-23T03:00:00Z"))}]
+    (is (= 1 (db/weather-lake-count wx)) "a Worker fallback is not counted as the lake")
+    (is (= "bafkA" (db/current-frame-cid wx)) "the frame at or before the clock")
+    (is (= "https://bafkA.ipfs.yataverse.com/" (db/lake-url "bafkA")))
+    (is (nil? (db/current-frame-cid (dissoc wx :t))))))

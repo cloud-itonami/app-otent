@@ -281,6 +281,9 @@ async function weatherChecks(p, label) {
   const loaded = await p.evaluate(() => (document.querySelector('.otent-overlay')?.innerText.match(/frames (\d+)\/(\d+)/) || []).slice(1).map(Number));
   check(`${label}: every forecast frame arrived`, loaded.length === 2 && loaded[0] === loaded[1] && loaded[1] > 0,
         `frames ${loaded.join('/')}`);
+  const lake = await p.evaluate(() => (document.querySelector('.otent-overlay')?.innerText.match(/yataverse (\d+)\/(\d+)/) || []).slice(1).map(Number));
+  check(`${label}: every frame was served by the yataverse.com lake and matched its sha256`,
+        lake.length === 2 && lake[0] === lake[1] && lake[1] > 0, `yataverse ${lake.join('/')}`);
   check(`${label}: the pressure surface is uploaded (91 x 181 vertices)`, mesh === 91 * 181, `mesh=${mesh}`);
   check(`${label}: isobars, rain and wind trails are uploaded`, lines > 10000, `lines=${lines}`);
   check(`${label}: the forecast clock is playing`, a.wxFrame && (b.frames > a.frames), `${a.wxFrame} -> ${b.wxFrame}`);

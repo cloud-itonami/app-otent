@@ -39,6 +39,7 @@
    :exaggeration 1.0
    :show {:isobars true :wind true :rain true}
    :probe nil
+   :sources {}           ; frame index -> :lake | :worker
    :detail nil})
 
 (def default-db
@@ -58,13 +59,14 @@
   "One line per kind for the UI, including the kinds that are not there."
   [db]
   (for [k kinds
-        :let [{:keys [status objects refused as-of snapshot-id detail count*]} (layer db k)]]
+        :let [{:keys [status objects refused as-of snapshot-id detail count* payloads]} (layer db k)]]
     {:kind k
      :status status
      :count (or count* (clojure.core/count objects))
      :refused (clojure.core/count refused)
      :as-of as-of
      :snapshot-id snapshot-id
+     :payloads payloads
      :detail detail}))
 
 (defn visible-objects
@@ -238,3 +240,25 @@
   (let [d (js/Date. (+ ms (* 9 3600000)))]
     (str (inc (.getUTCMonth d)) "/" (.getUTCDate d) " " (pad2 (.getUTCHours d)) ":"
          (pad2 (.getUTCMinutes d)) " JST")))
+
+(def lake-gateway-suffix ".ipfs.yataverse.com")
+
+(defn lake-url
+  "Where a CID resolves in the yataverse.com lake."
+  [cid]
+  (str "https://" cid lake-gateway-suffix "/"))
+
+(defn weather-lake-count
+  "How many loaded frames the lake itself served (vs this Worker's copy)."
+  [wx]
+  (count (filter #(= :lake %) (vals (:sources wx)))))
+
+(defn current-frame-cid
+  "The CID of the frame at or before the clock -- the one a reader would
+  cite for what is on screen."
+  [wx]
+  (let [ts (weather-times wx)
+        t (:t wx)
+        frames (get-in wx [:manifest :frames])]
+    (when (and t (seq ts))
+      (:cid (nth frames (max 0 (dec (count (take-while #(<= % t) ts)))))))))
