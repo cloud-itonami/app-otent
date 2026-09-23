@@ -34,7 +34,7 @@
 
 (defn- log [& xs] (binding [*print-fn* *print-err-fn*] (apply println xs)))
 
-(def source-exts #{".cljk" ".cljc" ".cljs" ".edn" ".css" ".js" ".json"})
+(def source-exts #{".cljk" ".cljc" ".edn" ".css" ".js" ".json"})
 
 (defn- copy-tree!
   "Copy `from` to `to`, renaming `.cljk` to `.cljc`. Returns files copied."
