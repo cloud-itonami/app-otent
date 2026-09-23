@@ -73,6 +73,7 @@
                                      :refused refused
                                      :count* (count ready)
                                      :as-of (:as-of payload)
+                                     :payloads (:payloads payload)
                                      :snapshot-id (:snapshot-id payload)})))
      (assoc-in d [:layers kind]
                {:status :loaded
@@ -88,6 +89,7 @@
                                (filter #(and (:lat %) (:lon %)) (:objects payload)))
                 :refused []
                 :as-of (:as-of payload)
+                :payloads (:payloads payload)
                 :snapshot-id (:snapshot-id payload)}))))
 
 (rf/reg-event-db
@@ -185,7 +187,7 @@
 (rf/reg-event-db
  ::weather-manifest-loaded
  (fn [d [_ m]]
-   (let [wx (assoc (:weather d) :status :loaded :manifest m :loaded #{})]
+   (let [wx (assoc (:weather d) :status :loaded :manifest m :loaded #{} :sources {})]
      (assoc d :weather (assoc wx :t (db/weather-start-t wx (js/Date.now)))))))
 
 (rf/reg-event-db
@@ -197,7 +199,10 @@
            :detail (or (:detail body) (:error body) (str "HTTP " status)))))
 
 (rf/reg-event-db ::weather-frame-loaded
-                 (fn [d [_ i]] (update-in d [:weather :loaded] conj i)))
+                 (fn [d [_ i source]]
+                   (-> d
+                       (update-in [:weather :loaded] conj i)
+                       (assoc-in [:weather :sources i] source))))
 
 (rf/reg-event-db ::weather-advance
                  (fn [d [_ dt-ms]] (update d :weather db/advance-weather dt-ms)))

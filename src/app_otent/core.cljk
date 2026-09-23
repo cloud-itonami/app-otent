@@ -175,6 +175,39 @@
   ;; manifest keys are bucket paths; the Worker serves them under /api/weather/
   (subs key (count "otent/weather/")))
 
+(defn- hex [^js buf]
+  (apply str (map #(.padStart (.toString % 16) 2 "0") (array-seq (js/Uint8Array. buf)))))
+
+(defn- fetch-frame
+  "One frame's bytes, from the yataverse.com lake first.
+
+  The manifest names each frame by CID; `{cid}.ipfs.yataverse.com` serves
+  it, byte-verified by the gateway. The browser checks again -- sha256 of
+  what arrived against the manifest's -- because a gateway that is right
+  today is not a proof about the bytes in hand. A miss, a refusal or a
+  mismatch falls back to this Worker's copy in our own bucket, and the
+  source of every frame is counted on the page: `yataverse 35/35` means
+  the lake served the whole forecast, not that it was merely linked."
+  [{:keys [cid sha256 key]}]
+  (let [worker #(-> (js/fetch (str "/api/weather/" (weather-key-path key)))
+                    (.then (fn [r] (if (.-ok r) (.arrayBuffer r)
+                                       (throw (js/Error. (str "HTTP " (.-status r)))))))
+                    (.then (fn [buf] {:buf buf :source :worker})))]
+    (if-not (and cid sha256)
+      (worker)
+      (-> (js/fetch (str "https://" cid ".ipfs.yataverse.com/"))
+          (.then (fn [r] (if (.-ok r) (.arrayBuffer r)
+                             (throw (js/Error. (str "lake HTTP " (.-status r)))))))
+          (.then (fn [buf]
+                   (-> (.digest (.-subtle js/crypto) "SHA-256" buf)
+                       (.then (fn [d]
+                                (if (= sha256 (hex d))
+                                  {:buf buf :source :lake}
+                                  (throw (js/Error. "lake bytes do not match the manifest's sha256"))))))))
+          (.catch (fn [e]
+                    (diag! :wxLakeMiss (str cid " " (.-message e)))
+                    (worker)))))))
+
 (defn- load-weather-frames!
   "Fetch and decode every frame of the manifest's run, nearest to the
   clock first, two at a time. Each arrival is reported to app-db so the
@@ -189,15 +222,14 @@
         lane (fn lane []
                (when-let [i (first @queue)]
                  (swap! queue rest)
-                 (-> (js/fetch (str "/api/weather/" (weather-key-path (:key (nth frames i)))))
-                     (.then (fn [r] (if (.-ok r) (.arrayBuffer r) (throw (js/Error. (str "HTTP " (.-status r)))))))
-                     (.then (fn [buf]
+                 (-> (fetch-frame (nth frames i))
+                     (.then (fn [{:keys [buf source]}]
                               (when (= run (:run @wx-state))
                                 (let [f (wx/decode-frame buf manifest)]
                                   (if (:refused f)
                                     (diag! :wxRefused (str i ":" (name (:refused f))))
                                     (do (swap! wx-state assoc-in [:frames i] (:fields f))
-                                        (rf/dispatch [::events/weather-frame-loaded i])))))))
+                                        (rf/dispatch [::events/weather-frame-loaded i source])))))))
                      (.catch (fn [e] (diag! :wxError (str i ": " (.-message e)))))
                      (.then lane))))]
     (swap! wx-state assoc :run run :frames {} :cur nil :key nil)

@@ -32,7 +32,8 @@
   same fact as a row dropped for being older than the window, and neither
   is the same as an object we simply do not have. The stats travel in the
   response so a reader can tell `no aircraft` from `no aircraft recently`."
-  (:require [kotoba.lang.text :as str]))
+  (:require [content-address.core :as ca]
+            [kotoba.lang.text :as str]))
 
 (def default-window-ms
   "How far back an object may have been observed and still be drawn.
@@ -76,6 +77,36 @@
 
 (defn window-ms [kind]
   (get default-window-ms (some-> kind name str/lower) fallback-window-ms))
+
+(defn- hex->octets [hex]
+  (mapv #(js/parseInt (subs hex (* 2 %) (+ 2 (* 2 %))) 16) (range (quot (count hex) 2))))
+
+(defn payload-cid
+  "The yataverse.com address of a row's payload: the raw CIDv1 its
+  `payload_sha256` already is. nil for anything that is not a sha256 --
+  such a row has no lake address, and that is an answer, not a fault."
+  [hex]
+  (when (and (string? hex) (re-matches #"[0-9a-f]{64}" hex))
+    (ca/cid-string :raw (hex->octets hex))))
+
+(defn payload-summary
+  "The payloads behind a layer's objects, as `[{:cid :rows}]`, most rows
+  first, at most `limit`. Each object's `:p` (its payload's sha256) is the
+  input; the objects the browser receives do not carry it -- 7,214 aircraft
+  from one poll would repeat one 59-character CID 7,214 times.
+
+  otent publishes every payload to the yataverse.com lake under exactly
+  this CID (`otent.lake`), so each entry is fetchable, byte-verified, at
+  https://{cid}.ipfs.yataverse.com/ -- the observation the rows were
+  parsed from, not a copy of the rows."
+  [objects limit]
+  (->> objects
+       (keep :p)
+       frequencies
+       (keep (fn [[sha n]] (when-let [c (payload-cid sha)] {:cid c :rows n})))
+       (sort-by (juxt (comp - :rows) :cid))
+       (take limit)
+       vec))
 
 (defn fold
   "`objects` -> the newest observation per object, within the window.

@@ -93,3 +93,19 @@
     (is (= [] objects))
     (is (= 0 (:rows stats)))
     (is (nil? (:newest-observed-at stats)))))
+
+(def empty-sha "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+(def abc-sha "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+
+(deftest a-rows-payload-hash-is-its-lake-address
+  ;; the same spelling otent.lake publishes under
+  (is (= "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku" (o/payload-cid empty-sha)))
+  (is (nil? (o/payload-cid "not-a-hash")))
+  (is (nil? (o/payload-cid nil))))
+
+(deftest payloads-are-summarised-by-rows-and-never-invented
+  (let [objs (concat (repeat 3 {:id "a" :p abc-sha}) [{:id "b" :p empty-sha} {:id "c"} {:id "d" :p "bad"}])
+        s (o/payload-summary objs 20)]
+    (is (= [3 1] (map :rows s)) "most rows first; no hash and a bad hash are not addresses")
+    (is (= (o/payload-cid abc-sha) (:cid (first s))))
+    (is (= 1 (count (o/payload-summary objs 1))) "bounded")))

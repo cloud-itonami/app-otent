@@ -4,7 +4,7 @@
   "private": true,
   "description": "otent - live public spatial intelligence on a WebGPU globe, read from Cloudflare R2 Data Catalog",
   "scripts": {
-    "test": "kbb --backend sci --classpath src:test:../../kotoba-lang/text/src:../../kotoba-lang/jp-go-digital-design-system/resources:../../kotoba-lang/geo/src:../../kotoba-lang/sgp4/src:../../kotoba-lang/jp-go-digital-design-system/src:../../kotoba-lang/html/src:../../kotoba-lang/css/src test/run.cljk",
+    "test": "kbb --backend sci --classpath src:test:../../kotoba-lang/text/src:../../kotoba-lang/content-address/src:../../kotoba-lang/jp-go-digital-design-system/resources:../../kotoba-lang/geo/src:../../kotoba-lang/sgp4/src:../../kotoba-lang/jp-go-digital-design-system/src:../../kotoba-lang/html/src:../../kotoba-lang/css/src test/run.cljk",
     "build:worker": "node ../../../scripts/resource-guard.mjs run build -- kbb --backend sci --classpath ../../kotoba-lang/text/src scripts/build.cljk worker",
     "build:app": "node ../../../scripts/resource-guard.mjs run build -- kbb --backend sci --classpath ../../kotoba-lang/text/src scripts/build.cljk app",
     "build": "node ../../../scripts/resource-guard.mjs run build -- kbb --backend sci --classpath ../../kotoba-lang/text/src scripts/build.cljk app worker",
