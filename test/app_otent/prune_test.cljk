@@ -1,6 +1,6 @@
 (ns app-otent.prune-test
   "Which data files a scan must open, and which it may skip."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [app-otent.prune :as ice]))
 
 (defn- f [name upper] {:path name :records 10 :upper (if upper {8 upper} {})})

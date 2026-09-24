@@ -1,5 +1,5 @@
 (ns app-otent.route-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [app-otent.route :as route]))
 
 (deftest every-view-is-reachable-from-its-own-fragment

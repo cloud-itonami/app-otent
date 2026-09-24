@@ -1,5 +1,5 @@
 (ns app-otent.db-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [app-otent.db :as db]))
 
 (deftest unavailable-does-not-collapse-into-loaded-zero

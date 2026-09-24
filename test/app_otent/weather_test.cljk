@@ -1,7 +1,7 @@
 (ns app-otent.weather-test
   "The simulation without a browser: decode, time, space, the surface, the
   isobars, the extrema, and a particle carried by a known wind."
-  (:require [clojure.test :as t]
+  (:require [kotoba.test :as t]
             [app-otent.weather :as wx]
             [app-otent.globe.scene :as scene]))
 

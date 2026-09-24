@@ -3,7 +3,7 @@
 
   Every test here asserts both directions: what survives and what is
   dropped, and for which of the two reasons."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [app-otent.objects :as o]))
 
 (def t0 1787726417000)
