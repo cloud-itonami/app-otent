@@ -26,7 +26,7 @@
   (:require ["child_process" :as cp]
             ["fs" :as fs]
             ["path" :as path]
-            [clojure.edn :as edn]
+            [kotoba.lang.edn :as edn]
             [kotoba.lang.text :as str]))
 
 (def root (js/process.cwd))
