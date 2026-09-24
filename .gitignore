@@ -7,3 +7,4 @@ public/*.map
 .nrepl-port
 .DS_Store
 .build/
+.nbb/

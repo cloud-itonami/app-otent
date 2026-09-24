@@ -1,5 +1,5 @@
 (ns run
-  (:require [clojure.test :as t]
+  (:require [kotoba.test :as t]
             [app-otent.scene-test]
             [app-otent.route-test]
             [app-otent.propagate-test]

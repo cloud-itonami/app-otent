@@ -1,6 +1,6 @@
 (ns app-otent.iceberg-test
   "The pure parts of the Iceberg reader."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kotoba.lang.text :as str]
             [app-otent.iceberg-id :as ice-id]))
 

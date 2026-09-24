@@ -1,5 +1,5 @@
 (ns app-otent.propagate-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [app-otent.propagate :as prop]))
 
 ;; Real element sets, fetched from CelesTrak 2026-08-26. The GEO one is
